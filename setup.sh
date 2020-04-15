@@ -20,3 +20,6 @@ pip3 install --user setuptools
 # Change default clang version.
 sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/lib/llvm-8/bin/clang++ 180 &&
 sudo update-alternatives --install /usr/bin/clang clang /usr/lib/llvm-8/bin/clang 180
+
+# Clone carla and unreal engine git repos
+git submodule update --init --recursive

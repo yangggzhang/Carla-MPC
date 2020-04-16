@@ -1,5 +1,5 @@
 # Carla-MPC
-Download Carla
+Download stable Carla
 ```
 ./setup.sh
 ```

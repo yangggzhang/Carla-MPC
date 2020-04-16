@@ -1,8 +1,4 @@
 #!/bin/bash
-# Install dependencies. 
-sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 304F9BC29914A77D
-sudo add-apt-repository "deb [arch=amd64 trusted=yes] http://dist.carla.org/carla-0.9.8/ all main"
-sudo apt-get update
-sudo apt-get install carla
-echo "alias carla='/opt/carla/bin/CarlaUE4.sh'" >> ~/.bashrc
-source ~/.bashrc
+sudo apt-get install unzip
+wget --load-cookies /tmp/cookies.txt "https://docs.google.com/uc?export=download&confirm=$(wget --quiet --save-cookies /tmp/cookies.txt --keep-session-cookies --no-check-certificate 'https://docs.google.com/uc?export=download&id=1cAfJm_oJd3_u1pES0UQhCSd1eCeszrnT' -O- | sed -rn 's/.*confirm=([0-9A-Za-z_]+).*/\1\n/p')&id=1cAfJm_oJd3_u1pES0UQhCSd1eCeszrnT" -O CarlarSimulator.zip && rm -rf /tmp/cookies.txt
+unzip CarlarSimulator.zip

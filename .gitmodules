@@ -1,1 +1,7 @@
 
+[submodule "references/Motion-Planning-on-CARLA"]
+	path = references/Motion-Planning-on-CARLA
+	url = https://github.com/paulyehtw/Motion-Planning-on-CARLA.git
+[submodule "references/carla"]
+	path = references/carla
+	url = https://github.com/asap-report/carla.git

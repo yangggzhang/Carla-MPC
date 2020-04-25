@@ -352,10 +352,11 @@ def exec_waypoint_nav_demo(args):
         #############################################
         # This is where we take the controller2d.py class
         # and apply it to the simulator
-        if args.controller == 'MPC':
-            controller = PIDController.Controller(waypoints)
-        else:
+        print(args.controller)
+        if args.controller == 'mpc':
             controller = MPCController.Controller(waypoints)
+        else:
+            controller = PIDController.Controller(waypoints)
         # controller = MPCController.Controller(waypoints)
 
         #############################################

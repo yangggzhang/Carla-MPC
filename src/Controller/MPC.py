@@ -200,15 +200,22 @@ class MPC:
         x0 = np.array([[self.x], [self.y], [self.v], [self.yaw]])
         idx, x_ref = self.get_ref_traj(cx, cy, cyaw, ck, speed_profile,
                                   self.prev_idx, dt=dt)
-        plt.figure(0)
-        plt.plot(x_ref[0, :], x_ref[1, :], 'xr')
+        # plt.figure(0)
+        # plt.plot(x_ref[0, :], x_ref[1, :], 'xr')
 
         self.prev_idx = idx[0]
         xs, ys, vs, yaws, self.prev_accelerations, self.prev_deltas = \
             self.linear_mpc(x_ref, x0, self.prev_deltas, dt=dt)
 
-        plt.plot(xs, ys, '.b')
-        plt.ylim([70, 150])
-        plt.pause(0.01)
+        # plt.plot(xs, ys, '.b')
+        # plt.ylim([70, 150])
+        # plt.pause(0.01)
 
+        # print('---------')
+        # print(self.prev_accelerations)
+        # print(self.prev_deltas)
+        # print(xs)
+        # print(ys)
+        # print(vs)
+        # print(yaws)
         return self.prev_accelerations[0], self.prev_deltas[0], xs, ys, vs, yaws

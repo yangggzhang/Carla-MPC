@@ -5,3 +5,9 @@
 [submodule "references/carla"]
 	path = references/carla
 	url = https://github.com/asap-report/carla.git
+[submodule "references/carla_sim"]
+	path = references/carla_sim
+	url = https://github.com/Nanda-Kishore-V/carla_sim.git
+[submodule "references/SelfDrivingCarsControlDesign"]
+	path = references/SelfDrivingCarsControlDesign
+	url = https://github.com/enginBozkurt/SelfDrivingCarsControlDesign.git

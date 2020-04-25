@@ -259,7 +259,7 @@ class Controller(object):
             ######################################################
             # SET CONTROLS OUTPUT
             ######################################################
-            self.set_throttle(1.0)  # in percent (0 to 1)
+            self.set_throttle(throttle_output)  # in percent (0 to 1)
             self.set_steer(steer_output)        # in rad (-1.22 to 1.22)
             self.set_brake(brake_output)        # in percent (0 to 1)
 

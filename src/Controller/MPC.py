@@ -10,7 +10,7 @@ class MPC:
     def __init__(self, x=0, y=0, yaw=0, v=0, delta=0,
                  max_steering_angle=1.22, L=3, Q=np.eye(4), Qf=np.eye(4),
                  R=np.eye(2), Rd=np.eye(2), len_horizon=5, a_max=2, a_min=-1,
-                 a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=15):
+                 a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=80):
 
         # States
         self.x = x

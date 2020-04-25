@@ -13,5 +13,6 @@ Run Carla
 ```
 ./CarlaSimulator/CarlaUE4.sh /Game/Maps/RaceTrack -windowed -carla-server -benchmark -quality-level=Low -fps=30
 
-python3 src/main.py
+cd src
+python3 main.py
 ```

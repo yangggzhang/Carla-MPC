@@ -1,693 +1,841 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
+# Copyright (c) 2019 Computer Vision Center (CVC) at the Universitat Autonoma de
+# Barcelona (UAB).
+#
 # This work is licensed under the terms of the MIT license.
 # For a copy, see <https://opensource.org/licenses/MIT>.
 
-"""
-CARLA waypoint follower assessment client script.
+# Allows controlling a vehicle with a keyboard. For a simpler and more
+# documented example, please take a look at tutorial.py.
 
-A controller assessment to follow a given trajectory, where the trajectory
-can be defined using way-points.
-
-STARTING in a moment...
 """
+Welcome to CARLA manual control.
+
+Use ARROWS or WASD keys for control.
+
+    W            : throttle
+    S            : brake
+    AD           : steer
+    Q            : toggle reverse
+    Space        : hand-brake
+    P            : toggle autopilot
+    M            : toggle manual transmission
+    ,/.          : gear up/down
+
+    TAB          : change sensor position
+    `            : next sensor
+    [1-9]        : change to sensor [1-9]
+    C            : change weather (Shift+C reverse)
+    Backspace    : change vehicle
+
+    R            : toggle recording images to disk
+
+    CTRL + R     : toggle recording of simulation (replacing any previous)
+    CTRL + P     : start replaying last recorded simulation
+    CTRL + +     : increments the start time of the replay by 1 second (+SHIFT = 10 seconds)
+    CTRL + -     : decrements the start time of the replay by 1 second (+SHIFT = 10 seconds)
+
+    F1           : toggle HUD
+    H/?          : toggle help
+    ESC          : quit
+"""
+
 from __future__ import print_function
-from __future__ import division
 
-# System level imports
-import sys
+
+# ==============================================================================
+# -- find carla module ---------------------------------------------------------
+# ==============================================================================
+
+
+import glob
 import os
+import sys
+
+try:
+    sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
+        sys.version_info.major,
+        sys.version_info.minor,
+        'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
+except IndexError:
+    pass
+
+
+# ==============================================================================
+# -- imports -------------------------------------------------------------------
+# ==============================================================================
+
+
+import carla
+
+from carla import ColorConverter as cc
+
 import argparse
+import collections
+import datetime
 import logging
-import time
 import math
-import numpy as np
-import csv
-import matplotlib.pyplot as plt
-import Controller.PIDController as PIDController
-import Controller.MPCController as MPCController
-import configparser 
-
-# Script level imports
-sys.path.append(os.path.abspath(sys.path[0] + '/..'))
-import live_plotter as lv   # Custom live plotting library
-from carla            import sensor
-from carla.client     import make_carla_client, VehicleControl
-from carla.settings   import CarlaSettings
-from carla.tcp        import TCPConnectionError
-from carla.controller import utils
-
-"""
-Configurable params
-"""
-ITER_FOR_SIM_TIMESTEP  = 10     # no. iterations to compute approx sim timestep
-WAIT_TIME_BEFORE_START = 5.00   # game seconds (time before controller start)
-TOTAL_RUN_TIME         = 200.00 # game seconds (total runtime before sim end)
-TOTAL_FRAME_BUFFER     = 300    # number of frames to buffer after total runtime
-NUM_PEDESTRIANS        = 0      # total number of pedestrians to spawn
-NUM_VEHICLES           = 0      # total number of vehicles to spawn
-SEED_PEDESTRIANS       = 0      # seed for pedestrian spawn randomizer
-SEED_VEHICLES          = 0      # seed for vehicle spawn randomizer
-
-WEATHERID = {
-    "DEFAULT": 0,
-    "CLEARNOON": 1,
-    "CLOUDYNOON": 2,
-    "WETNOON": 3,
-    "WETCLOUDYNOON": 4,
-    "MIDRAINYNOON": 5,
-    "HARDRAINNOON": 6,
-    "SOFTRAINNOON": 7,
-    "CLEARSUNSET": 8,
-    "CLOUDYSUNSET": 9,
-    "WETSUNSET": 10,
-    "WETCLOUDYSUNSET": 11,
-    "MIDRAINSUNSET": 12,
-    "HARDRAINSUNSET": 13,
-    "SOFTRAINSUNSET": 14,
-}
-SIMWEATHER = WEATHERID["CLEARNOON"]     # set simulation weather
-
-PLAYER_START_INDEX = 1      # spawn index for player (keep to 1)
-FIGSIZE_X_INCHES   = 8      # x figure size of feedback in inches
-FIGSIZE_Y_INCHES   = 8      # y figure size of feedback in inches
-PLOT_LEFT          = 0.1    # in fractions of figure width and height
-PLOT_BOT           = 0.1    
-PLOT_WIDTH         = 0.8
-PLOT_HEIGHT        = 0.8
-
-WAYPOINTS_FILENAME = 'racetrack_waypoints.txt'  # waypoint file to load
-DIST_THRESHOLD_TO_LAST_WAYPOINT = 2.0  # some distance from last position before
-                                       # simulation ends
-                                       
-# Path interpolation parameters
-INTERP_MAX_POINTS_PLOT    = 10   # number of points used for displaying
-                                 # lookahead path
-INTERP_LOOKAHEAD_DISTANCE = 20   # lookahead in meters
-INTERP_DISTANCE_RES       = 0.01 # distance between interpolated points
-
-# controller output directory
-CONTROLLER_OUTPUT_FOLDER = os.path.dirname(os.path.realpath(__file__)) +\
-                           '/controller_output/'
-
-def make_carla_settings(args):
-    """Make a CarlaSettings object with the settings we need.
-    """
-    settings = CarlaSettings()
-    
-    # There is no need for non-agent info requests if there are no pedestrians
-    # or vehicles.
-    get_non_player_agents_info = False
-    if (NUM_PEDESTRIANS > 0 or NUM_VEHICLES > 0):
-        get_non_player_agents_info = True
-
-    # Base level settings
-    settings.set(
-        SynchronousMode=True,
-        SendNonPlayerAgentsInfo=get_non_player_agents_info, 
-        NumberOfVehicles=NUM_VEHICLES,
-        NumberOfPedestrians=NUM_PEDESTRIANS,
-        SeedVehicles=SEED_VEHICLES,
-        SeedPedestrians=SEED_PEDESTRIANS,
-        WeatherId=SIMWEATHER,
-        QualityLevel=args.quality_level)
-    return settings
-
-class Timer(object):
-    """ Timer Class
-    
-    The steps are used to calculate FPS, while the lap or seconds since lap is
-    used to compute elapsed time.
-    """
-    def __init__(self, period):
-        self.step = 0
-        self._lap_step = 0
-        self._lap_time = time.time()
-        self._period_for_lap = period
-
-    def tick(self):
-        self.step += 1
-
-    def has_exceeded_lap_period(self):
-        if self.elapsed_seconds_since_lap() >= self._period_for_lap:
-            return True
-        else:
-            return False
-
-    def lap(self):
-        self._lap_step = self.step
-        self._lap_time = time.time()
-
-    def ticks_per_second(self):
-        return float(self.step - self._lap_step) /\
-                     self.elapsed_seconds_since_lap()
-
-    def elapsed_seconds_since_lap(self):
-        return time.time() - self._lap_time
-
-def get_current_pose(measurement):
-    """Obtains current x,y,yaw pose from the client measurements
-    
-    Obtains the current x,y, and yaw pose from the client measurements.
-
-    Args:
-        measurement: The CARLA client measurements (from read_data())
-
-    Returns: (x, y, yaw)
-        x: X position in meters
-        y: Y position in meters
-        yaw: Yaw position in radians
-    """
-    x   = measurement.player_measurements.transform.location.x
-    y   = measurement.player_measurements.transform.location.y
-    yaw = math.radians(measurement.player_measurements.transform.rotation.yaw)
-
-    return (x, y, yaw)
-
-def get_start_pos(scene):
-    """Obtains player start x,y, yaw pose from the scene
-    
-    Obtains the player x,y, and yaw pose from the scene.
-
-    Args:
-        scene: The CARLA scene object
-
-    Returns: (x, y, yaw)
-        x: X position in meters
-        y: Y position in meters
-        yaw: Yaw position in radians
-    """
-    x = scene.player_start_spots[0].location.x
-    y = scene.player_start_spots[0].location.y
-    yaw = math.radians(scene.player_start_spots[0].rotation.yaw)
-
-    return (x, y, yaw)
-
-def send_control_command(client, throttle, steer, brake, 
-                         hand_brake=False, reverse=False):
-    """Send control command to CARLA client.
-    
-    Send control command to CARLA client.
-
-    Args:
-        client: The CARLA client object
-        throttle: Throttle command for the sim car [0, 1]
-        steer: Steer command for the sim car [-1, 1]
-        brake: Brake command for the sim car [0, 1]
-        hand_brake: Whether the hand brake is engaged
-        reverse: Whether the sim car is in the reverse gear
-    """
-    control = VehicleControl()
-    # Clamp all values within their limits
-    steer = np.fmax(np.fmin(steer, 1.0), -1.0)
-    throttle = np.fmax(np.fmin(throttle, 1.0), 0)
-    brake = np.fmax(np.fmin(brake, 1.0), 0)
-
-    control.steer = steer
-    control.throttle = throttle
-    control.brake = brake
-    control.hand_brake = hand_brake
-    control.reverse = reverse
-    client.send_control(control)
-
-def create_controller_output_dir(output_folder):
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
-
-def store_trajectory_plot(graph, fname):
-    """ Store the resulting plot.
-    """
-    create_controller_output_dir(CONTROLLER_OUTPUT_FOLDER)
-
-    file_name = os.path.join(CONTROLLER_OUTPUT_FOLDER, fname)
-    graph.savefig(file_name)
-
-def write_trajectory_file(x_list, y_list, v_list, t_list):
-    create_controller_output_dir(CONTROLLER_OUTPUT_FOLDER)
-    file_name = os.path.join(CONTROLLER_OUTPUT_FOLDER, 'trajectory.txt')
-
-    with open(file_name, 'w') as trajectory_file: 
-        for i in range(len(x_list)):
-            trajectory_file.write('%3.3f, %3.3f, %2.3f, %6.3f\n' %\
-                                  (x_list[i], y_list[i], v_list[i], t_list[i]))
-
-def exec_waypoint_nav_demo(args):
-    """ Executes waypoint navigation demo.
-    """
-
-    with make_carla_client(args.host, args.port) as client:
-        print('Carla client connected.')
-
-        settings = make_carla_settings(args)
-
-        # Now we load these settings into the server. The server replies
-        # with a scene description containing the available start spots for
-        # the player. Here we can provide a CarlaSettings object or a
-        # CarlaSettings.ini file as string.
-        scene = client.load_settings(settings)
-
-        # Refer to the player start folder in the WorldOutliner to see the 
-        # player start information
-        player_start = PLAYER_START_INDEX
-
-        # Notify the server that we want to start the episode at the
-        # player_start index. This function blocks until the server is ready
-        # to start the episode.
-        print('Starting new episode at %r...' % scene.map_name)
-        client.start_episode(player_start)
-
-        #############################################
-        # Load Configurations
-        #############################################
-
-        # Load configuration file (options.cfg) and then parses for the various
-        # options. Here we have two main options:
-        # live_plotting and live_plotting_period, which controls whether
-        # live plotting is enabled or how often the live plotter updates
-        # during the simulation run.
-        config = configparser.ConfigParser()
-        config.read(os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), 'options.cfg'))         
-        demo_opt = config['Demo Parameters']
-
-        # Get options
-        enable_live_plot = demo_opt.get('live_plotting', 'false').capitalize()
-        enable_live_plot = enable_live_plot == 'False'
-        live_plot_period = float(demo_opt.get('live_plotting_period', 0))
-
-        # Set options
-        live_plot_timer = Timer(live_plot_period)
-
-        #############################################
-        # Load Waypoints
-        #############################################
-        # Opens the waypoint file and stores it to "waypoints"
-        waypoints_file = WAYPOINTS_FILENAME
-        waypoints_np   = None
-        with open(waypoints_file) as waypoints_file_handle:
-            waypoints = list(csv.reader(waypoints_file_handle, 
-                                        delimiter=',',
-                                        quoting=csv.QUOTE_NONNUMERIC))
-            waypoints_np = np.array(waypoints)
-
-        # Because the waypoints are discrete and our controller performs better
-        # with a continuous path, here we will send a subset of the waypoints
-        # within some lookahead distance from the closest point to the vehicle.
-        # Interpolating between each waypoint will provide a finer resolution
-        # path and make it more "continuous". A simple linear interpolation
-        # is used as a preliminary method to address this issue, though it is
-        # better addressed with better interpolation methods (spline 
-        # interpolation, for example). 
-        # More appropriate interpolation methods will not be used here for the
-        # sake of demonstration on what effects discrete paths can have on
-        # the controller. It is made much more obvious with linear
-        # interpolation, because in a way part of the path will be continuous
-        # while the discontinuous parts (which happens at the waypoints) will 
-        # show just what sort of effects these points have on the controller.
-        # Can you spot these during the simulation? If so, how can you further
-        # reduce these effects?
-        
-        # Linear interpolation computations
-        # Compute a list of distances between waypoints
-        wp_distance = []   # distance array
-        for i in range(1, waypoints_np.shape[0]):
-            wp_distance.append(
-                    np.sqrt((waypoints_np[i, 0] - waypoints_np[i-1, 0])**2 +
-                            (waypoints_np[i, 1] - waypoints_np[i-1, 1])**2))
-        wp_distance.append(0)  # last distance is 0 because it is the distance
-                               # from the last waypoint to the last waypoint
-
-        # Linearly interpolate between waypoints and store in a list
-        wp_interp      = []    # interpolated values 
-                               # (rows = waypoints, columns = [x, y, v])
-        wp_interp_hash = []    # hash table which indexes waypoints_np
-                               # to the index of the waypoint in wp_interp
-        interp_counter = 0     # counter for current interpolated point index
-        for i in range(waypoints_np.shape[0] - 1):
-            # Add original waypoint to interpolated waypoints list (and append
-            # it to the hash table)
-            wp_interp.append(list(waypoints_np[i]))
-            wp_interp_hash.append(interp_counter)   
-            interp_counter+=1
-            
-            # Interpolate to the next waypoint. First compute the number of
-            # points to interpolate based on the desired resolution and
-            # incrementally add interpolated points until the next waypoint
-            # is about to be reached.
-            num_pts_to_interp = int(np.floor(wp_distance[i] /\
-                                         float(INTERP_DISTANCE_RES)) - 1)
-            wp_vector = waypoints_np[i+1] - waypoints_np[i]
-            wp_uvector = wp_vector / np.linalg.norm(wp_vector)
-            for j in range(num_pts_to_interp):
-                next_wp_vector = INTERP_DISTANCE_RES * float(j+1) * wp_uvector
-                wp_interp.append(list(waypoints_np[i] + next_wp_vector))
-                interp_counter+=1
-        # add last waypoint at the end
-        wp_interp.append(list(waypoints_np[-1]))
-        wp_interp_hash.append(interp_counter)   
-        interp_counter+=1
-
-        #############################################
-        # Controller 2D Class Declaration
-        #############################################
-        # This is where we take the controller2d.py class
-        # and apply it to the simulator
-        print(args.controller)
-        if args.controller == 'mpc':
-            controller = MPCController.Controller(waypoints)
-        else:
-            controller = PIDController.Controller(waypoints)
-        # controller = MPCController.Controller(waypoints)
-
-        #############################################
-        # Determine simulation average timestep (and total frames)
-        #############################################
-        # Ensure at least one frame is used to compute average timestep
-        num_iterations = ITER_FOR_SIM_TIMESTEP
-        if (ITER_FOR_SIM_TIMESTEP < 1):
-            num_iterations = 1
-
-        # Gather current data from the CARLA server. This is used to get the
-        # simulator starting game time. Note that we also need to
-        # send a command back to the CARLA server because synchronous mode
-        # is enabled.
-        measurement_data, sensor_data = client.read_data()
-        sim_start_stamp = measurement_data.game_timestamp / 1000.0
-        # Send a control command to proceed to next iteration.
-        # This mainly applies for simulations that are in synchronous mode.
-        send_control_command(client, throttle=0.0, steer=0, brake=1.0)
-        # Computes the average timestep based on several initial iterations
-        sim_duration = 0
-        for i in range(num_iterations):
-            # Gather current data
-            measurement_data, sensor_data = client.read_data()
-            # Send a control command to proceed to next iteration
-            send_control_command(client, throttle=0.0, steer=0, brake=1.0)
-            # Last stamp
-            if i == num_iterations - 1:
-                sim_duration = measurement_data.game_timestamp / 1000.0 -\
-                               sim_start_stamp  
-        
-        # Outputs average simulation timestep and computes how many frames
-        # will elapse before the simulation should end based on various
-        # parameters that we set in the beginning.
-        SIMULATION_TIME_STEP = sim_duration / float(num_iterations)
-        print("SERVER SIMULATION STEP APPROXIMATION: " + \
-              str(SIMULATION_TIME_STEP))
-        TOTAL_EPISODE_FRAMES = int((TOTAL_RUN_TIME + WAIT_TIME_BEFORE_START) /\
-                               SIMULATION_TIME_STEP) + TOTAL_FRAME_BUFFER
-
-        #############################################
-        # Frame-by-Frame Iteration and Initialization
-        #############################################
-        # Store pose history starting from the start position
-        measurement_data, sensor_data = client.read_data()
-        start_x, start_y, start_yaw = get_current_pose(measurement_data)
-        send_control_command(client, throttle=0.0, steer=0, brake=1.0)
-        x_history     = [start_x]
-        y_history     = [start_y]
-        yaw_history   = [start_yaw]
-        time_history  = [0]
-        speed_history = [0]
-
-        #############################################
-        # Vehicle Trajectory Live Plotting Setup
-        #############################################
-        # Uses the live plotter to generate live feedback during the simulation
-        # The two feedback includes the trajectory feedback and
-        # the controller feedback (which includes the speed tracking).
-        lp_traj = lv.LivePlotter(tk_title="Trajectory Trace")
-        lp_1d = lv.LivePlotter(tk_title="Controls Feedback")
-        
-        ###
-        # Add 2D position / trajectory plot
-        ###
-        trajectory_fig = lp_traj.plot_new_dynamic_2d_figure(
-                title='Vehicle Trajectory',
-                figsize=(FIGSIZE_X_INCHES, FIGSIZE_Y_INCHES),
-                edgecolor="black",
-                rect=[PLOT_LEFT, PLOT_BOT, PLOT_WIDTH, PLOT_HEIGHT])
-
-        trajectory_fig.set_invert_x_axis() # Because UE4 uses left-handed 
-                                           # coordinate system the X
-                                           # axis in the graph is flipped
-        trajectory_fig.set_axis_equal()    # X-Y spacing should be equal in size
-
-        # Add waypoint markers
-        trajectory_fig.add_graph("waypoints", window_size=waypoints_np.shape[0],
-                                 x0=waypoints_np[:,0], y0=waypoints_np[:,1],
-                                 linestyle="-", marker="", color='g')
-        # Add trajectory markers
-        trajectory_fig.add_graph("trajectory", window_size=TOTAL_EPISODE_FRAMES,
-                                 x0=[start_x]*TOTAL_EPISODE_FRAMES, 
-                                 y0=[start_y]*TOTAL_EPISODE_FRAMES,
-                                 color=[1, 0.5, 0])
-        # Add lookahead path
-        trajectory_fig.add_graph("lookahead_path", 
-                                 window_size=INTERP_MAX_POINTS_PLOT,
-                                 x0=[start_x]*INTERP_MAX_POINTS_PLOT, 
-                                 y0=[start_y]*INTERP_MAX_POINTS_PLOT,
-                                 color=[0, 0.7, 0.7],
-                                 linewidth=4)
-        # Add starting position marker
-        trajectory_fig.add_graph("start_pos", window_size=1, 
-                                 x0=[start_x], y0=[start_y],
-                                 marker=11, color=[1, 0.5, 0], 
-                                 markertext="Start", marker_text_offset=1)
-        # Add end position marker
-        trajectory_fig.add_graph("end_pos", window_size=1, 
-                                 x0=[waypoints_np[-1, 0]], 
-                                 y0=[waypoints_np[-1, 1]],
-                                 marker="D", color='r', 
-                                 markertext="End", marker_text_offset=1)
-        # Add car marker
-        trajectory_fig.add_graph("car", window_size=1, 
-                                 marker="s", color='b', markertext="Car",
-                                 marker_text_offset=1)
-
-        ###
-        # Add 1D speed profile updater
-        ###
-        forward_speed_fig =\
-                lp_1d.plot_new_dynamic_figure(title="Forward Speed (m/s)")
-        forward_speed_fig.add_graph("forward_speed", 
-                                    label="forward_speed", 
-                                    window_size=TOTAL_EPISODE_FRAMES)
-        forward_speed_fig.add_graph("reference_signal", 
-                                    label="reference_Signal", 
-                                    window_size=TOTAL_EPISODE_FRAMES)
-
-        # Add throttle signals graph
-        throttle_fig = lp_1d.plot_new_dynamic_figure(title="Throttle")
-        throttle_fig.add_graph("throttle", 
-                              label="throttle", 
-                              window_size=TOTAL_EPISODE_FRAMES)
-        # Add brake signals graph
-        brake_fig = lp_1d.plot_new_dynamic_figure(title="Brake")
-        brake_fig.add_graph("brake", 
-                              label="brake", 
-                              window_size=TOTAL_EPISODE_FRAMES)
-        # Add steering signals graph
-        steer_fig = lp_1d.plot_new_dynamic_figure(title="Steer")
-        steer_fig.add_graph("steer", 
-                              label="steer", 
-                              window_size=TOTAL_EPISODE_FRAMES)
-
-        # live plotter is disabled, hide windows
-        if not enable_live_plot:
-            lp_traj._root.withdraw()
-            lp_1d._root.withdraw()        
-
-        # Iterate the frames until the end of the waypoints is reached or
-        # the TOTAL_EPISODE_FRAMES is reached. The controller simulation then
-        # ouptuts the results to the controller output directory.
-        reached_the_end = False
-        skip_first_frame = True
-        closest_index    = 0  # Index of waypoint that is currently closest to
-                              # the car (assumed to be the first index)
-        closest_distance = 0  # Closest distance of closest waypoint to car
-        for frame in range(TOTAL_EPISODE_FRAMES):
-            # Gather current data from the CARLA server
-            measurement_data, sensor_data = client.read_data()
-
-            # Update pose, timestamp
-            current_x, current_y, current_yaw = \
-                get_current_pose(measurement_data)
-            current_speed = measurement_data.player_measurements.forward_speed
-            current_timestamp = float(measurement_data.game_timestamp) / 1000.0
-
-            # Wait for some initial time before starting the demo
-            if current_timestamp <= WAIT_TIME_BEFORE_START:
-                send_control_command(client, throttle=0.0, steer=0, brake=1.0)
-                continue
-            else:
-                current_timestamp = current_timestamp - WAIT_TIME_BEFORE_START
-            
-            # Store history
-            x_history.append(current_x)
-            y_history.append(current_y)
-            yaw_history.append(current_yaw)
-            speed_history.append(current_speed)
-            time_history.append(current_timestamp) 
-
-            ###
-            # Controller update (this uses the controller2d.py implementation)
-            ###
-
-            # To reduce the amount of waypoints sent to the controller,
-            # provide a subset of waypoints that are within some 
-            # lookahead distance from the closest point to the car. Provide
-            # a set of waypoints behind the car as well.
-            
-            # Find closest waypoint index to car. First increment the index
-            # from the previous index until the new distance calculations
-            # are increasing. Apply the same rule decrementing the index.
-            # The final index should be the closest point (it is assumed that
-            # the car will always break out of instability points where there
-            # are two indices with the same minimum distance, as in the
-            # center of a circle)
-            closest_distance = np.linalg.norm(np.array([
-                    waypoints_np[closest_index, 0] - current_x,
-                    waypoints_np[closest_index, 1] - current_y]))
-            new_distance = closest_distance
-            new_index = closest_index
-            while new_distance <= closest_distance:
-                closest_distance = new_distance
-                closest_index = new_index
-                new_index += 1
-                if new_index >= waypoints_np.shape[0]:  # End of path
-                    break
-                new_distance = np.linalg.norm(np.array([
-                        waypoints_np[new_index, 0] - current_x,
-                        waypoints_np[new_index, 1] - current_y]))
-            new_distance = closest_distance
-            new_index = closest_index
-            while new_distance <= closest_distance:
-                closest_distance = new_distance
-                closest_index = new_index
-                new_index -= 1
-                if new_index < 0:  # Beginning of path
-                    break
-                new_distance = np.linalg.norm(np.array([
-                        waypoints_np[new_index, 0] - current_x,
-                        waypoints_np[new_index, 1] - current_y]))
-
-            # Once the closest index is found, return the path that has 1
-            # waypoint behind and X waypoints ahead, where X is the index
-            # that has a lookahead distance specified by 
-            # INTERP_LOOKAHEAD_DISTANCE
-            waypoint_subset_first_index = closest_index - 1
-            if waypoint_subset_first_index < 0:
-                waypoint_subset_first_index = 0
-
-            waypoint_subset_last_index = closest_index
-            total_distance_ahead = 0
-            while total_distance_ahead < INTERP_LOOKAHEAD_DISTANCE:
-                total_distance_ahead += wp_distance[waypoint_subset_last_index]
-                waypoint_subset_last_index += 1
-                if waypoint_subset_last_index >= waypoints_np.shape[0]:
-                    waypoint_subset_last_index = waypoints_np.shape[0] - 1
-                    break
-
-            # Use the first and last waypoint subset indices into the hash
-            # table to obtain the first and last indicies for the interpolated
-            # list. Update the interpolated waypoints to the controller
-            # for the next controller update.
-            new_waypoints = \
-                    wp_interp[wp_interp_hash[waypoint_subset_first_index]:\
-                              wp_interp_hash[waypoint_subset_last_index] + 1]
-            controller.update_waypoints(new_waypoints)
-
-            # Update the other controller values and controls
-            controller.update_values(current_x, current_y, current_yaw, 
-                                     current_speed,
-                                     current_timestamp, frame)
-            controller.update_controls()
-            cmd_throttle, cmd_steer, cmd_brake = controller.get_commands()
-
-            # Skip the first frame (so the controller has proper outputs)
-            if skip_first_frame and frame == 0:
-                pass
-            else:
-                # Update live plotter with new feedback
-                trajectory_fig.roll("trajectory", current_x, current_y)
-                trajectory_fig.roll("car", current_x, current_y)
-                # When plotting lookahead path, only plot a number of points
-                # (INTERP_MAX_POINTS_PLOT amount of points). This is meant
-                # to decrease load when live plotting
-                new_waypoints_np = np.array(new_waypoints)
-                path_indices = np.floor(np.linspace(0, 
-                                                    new_waypoints_np.shape[0]-1,
-                                                    INTERP_MAX_POINTS_PLOT))
-                trajectory_fig.update("lookahead_path", 
-                        new_waypoints_np[path_indices.astype(int), 0],
-                        new_waypoints_np[path_indices.astype(int), 1],
-                        new_colour=[0, 0.7, 0.7])
-                forward_speed_fig.roll("forward_speed", 
-                                       current_timestamp, 
-                                       current_speed)
-                forward_speed_fig.roll("reference_signal", 
-                                       current_timestamp, 
-                                       controller._desired_speed)
-
-                throttle_fig.roll("throttle", current_timestamp, cmd_throttle)
-                brake_fig.roll("brake", current_timestamp, cmd_brake)
-                steer_fig.roll("steer", current_timestamp, cmd_steer)
-
-                # Refresh the live plot based on the refresh rate 
-                # set by the options
-                if enable_live_plot and \
-                   live_plot_timer.has_exceeded_lap_period():
-                    lp_traj.refresh()
-                    lp_1d.refresh()
-                    live_plot_timer.lap()
-
-            # Output controller command to CARLA server
-            send_control_command(client,
-                                 throttle=cmd_throttle,
-                                 steer=cmd_steer,
-                                 brake=cmd_brake)
-
-            # Find if reached the end of waypoint. If the car is within
-            # DIST_THRESHOLD_TO_LAST_WAYPOINT to the last waypoint,
-            # the simulation will end.
-            dist_to_last_waypoint = np.linalg.norm(np.array([
-                waypoints[-1][0] - current_x,
-                waypoints[-1][1] - current_y]))
-            if  dist_to_last_waypoint < DIST_THRESHOLD_TO_LAST_WAYPOINT:
-                reached_the_end = True
-            if reached_the_end:
+import random
+import re
+import weakref
+
+try:
+    import pygame
+    from pygame.locals import KMOD_CTRL
+    from pygame.locals import KMOD_SHIFT
+    from pygame.locals import K_0
+    from pygame.locals import K_9
+    from pygame.locals import K_BACKQUOTE
+    from pygame.locals import K_BACKSPACE
+    from pygame.locals import K_COMMA
+    from pygame.locals import K_DOWN
+    from pygame.locals import K_ESCAPE
+    from pygame.locals import K_F1
+    from pygame.locals import K_LEFT
+    from pygame.locals import K_PERIOD
+    from pygame.locals import K_RIGHT
+    from pygame.locals import K_SLASH
+    from pygame.locals import K_SPACE
+    from pygame.locals import K_TAB
+    from pygame.locals import K_UP
+    from pygame.locals import K_a
+    from pygame.locals import K_c
+    from pygame.locals import K_d
+    from pygame.locals import K_h
+    from pygame.locals import K_m
+    from pygame.locals import K_p
+    from pygame.locals import K_q
+    from pygame.locals import K_r
+    from pygame.locals import K_s
+    from pygame.locals import K_w
+    from pygame.locals import K_MINUS
+    from pygame.locals import K_EQUALS
+except ImportError:
+    raise RuntimeError('cannot import pygame, make sure pygame package is installed')
+
+try:
+    import numpy as np
+except ImportError:
+    raise RuntimeError('cannot import numpy, make sure numpy package is installed')
+
+
+# ==============================================================================
+# -- Global functions ----------------------------------------------------------
+# ==============================================================================
+
+
+def find_weather_presets():
+    rgx = re.compile('.+?(?:(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|$)')
+    name = lambda x: ' '.join(m.group(0) for m in rgx.finditer(x))
+    presets = [x for x in dir(carla.WeatherParameters) if re.match('[A-Z].+', x)]
+    return [(getattr(carla.WeatherParameters, x), name(x)) for x in presets]
+
+
+def get_actor_display_name(actor, truncate=250):
+    name = ' '.join(actor.type_id.replace('_', '.').title().split('.')[1:])
+    return (name[:truncate - 1] + u'\u2026') if len(name) > truncate else name
+
+
+# ==============================================================================
+# -- World ---------------------------------------------------------------------
+# ==============================================================================
+
+
+class World(object):
+    def __init__(self, carla_world, hud, args):
+        self.world = carla_world
+        self.actor_role_name = args.rolename
+        self.map = self.world.get_map()
+        self.hud = hud
+        self.player = None
+        self.collision_sensor = None
+        self.lane_invasion_sensor = None
+        self.gnss_sensor = None
+        self.camera_manager = None
+        self._weather_presets = find_weather_presets()
+        self._weather_index = 0
+        self._actor_filter = args.filter
+        self._gamma = args.gamma
+        self.args = args
+        self.restart()
+        self.world.on_tick(hud.on_world_tick)
+        self.recording_enabled = False
+        self.recording_start = 0
+
+    def restart(self):
+        # Keep same camera config if the camera manager exists.
+        cam_index = self.camera_manager.index if self.camera_manager is not None else 0
+        cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
+        # Get a random blueprint.
+        blueprints = self.world.get_blueprint_library().filter(self._actor_filter)
+        blueprint = None
+        for blueprint_candidates in blueprints:
+            if blueprint_candidates.id == self.args.vehicle_id:
+                blueprint = blueprint_candidates
                 break
+        if blueprint is None:
+            blueprint = random.choice(self.world.get_blueprint_library().filter(self._actor_filter))
 
-        # End of demo - Stop vehicle and Store outputs to the controller output
-        # directory.
-        if reached_the_end:
-            print("Reached the end of path. Writing to controller_output...")
+        blueprint.set_attribute('role_name', self.actor_role_name)
+        if blueprint.has_attribute('color'):
+            color = random.choice(blueprint.get_attribute('color').recommended_values)
+            blueprint.set_attribute('color', color)
+        if blueprint.has_attribute('driver_id'):
+            driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
+            blueprint.set_attribute('driver_id', driver_id)
+        if blueprint.has_attribute('is_invincible'):
+            blueprint.set_attribute('is_invincible', 'true')
+        # Spawn the player.
+        if self.player is not None:
+            spawn_point = self.player.get_transform()
+            spawn_point.location.z += 2.0
+            spawn_point.rotation.roll = 0.0
+            spawn_point.rotation.pitch = 0.0
+            self.destroy()
+            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+        while self.player is None:
+            # spawn_points = self.map.get_spawn_points()
+            # spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
+            spawn_point = carla.Transform()
+            spawn_point.location.x = float(self.args.spawn_x)
+            spawn_point.location.y = float(self.args.spawn_y)
+            spawn_point.location.z = 1.0
+            spawn_point.rotation.yaw = float(self.args.spawn_yaw)
+            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+      
+        # Set up the sensors.
+        self.collision_sensor = CollisionSensor(self.player, self.hud)
+        self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
+        self.gnss_sensor = GnssSensor(self.player)
+        self.camera_manager = CameraManager(self.player, self.hud, self._gamma)
+        self.camera_manager.transform_index = cam_pos_index
+        self.camera_manager.set_sensor(cam_index, notify=False)
+        actor_type = get_actor_display_name(self.player)
+        self.hud.notification(actor_type)
+
+    def next_weather(self, reverse=False):
+        self._weather_index += -1 if reverse else 1
+        self._weather_index %= len(self._weather_presets)
+        preset = self._weather_presets[self._weather_index]
+        self.hud.notification('Weather: %s' % preset[1])
+        self.player.get_world().set_weather(preset[0])
+
+    def tick(self, clock):
+        self.hud.tick(self, clock)
+
+    def render(self, display):
+        self.camera_manager.render(display)
+        self.hud.render(display)
+
+    def destroy_sensors(self):
+        self.camera_manager.sensor.destroy()
+        self.camera_manager.sensor = None
+        self.camera_manager.index = None
+
+    def destroy(self):
+        actors = [
+            self.camera_manager.sensor,
+            self.collision_sensor.sensor,
+            self.lane_invasion_sensor.sensor,
+            self.gnss_sensor.sensor,
+            self.player]
+        for actor in actors:
+            if actor is not None:
+                actor.destroy()
+
+# ==============================================================================
+# -- VehicleControl -----------------------------------------------------------
+# ==============================================================================
+
+
+class VehicleControl(object):
+    def __init__(self, world, start_in_autopilot):
+        self._autopilot_enabled = start_in_autopilot
+        if isinstance(world.player, carla.Vehicle):
+            self._control = carla.VehicleControl()
+            world.player.set_autopilot(self._autopilot_enabled)
+        elif isinstance(world.player, carla.Walker):
+            self._control = carla.WalkerControl()
+            self._autopilot_enabled = False
+            self._rotation = world.player.get_transform().rotation
         else:
-            print("Exceeded assessment time. Writing to controller_output...")
-        # Stop the car
-        send_control_command(client, throttle=0.0, steer=0.0, brake=1.0)
-        # Store the various outputs
-        store_trajectory_plot(trajectory_fig.fig, 'trajectory.png')
-        store_trajectory_plot(forward_speed_fig.fig, 'forward_speed.png')
-        store_trajectory_plot(throttle_fig.fig, 'throttle_output.png')
-        store_trajectory_plot(brake_fig.fig, 'brake_output.png')
-        store_trajectory_plot(steer_fig.fig, 'steer_output.png')
-        write_trajectory_file(x_history, y_history, speed_history, time_history)
+            raise NotImplementedError("Actor type not supported")
+        self._steer_cache = 0.0
+        world.hud.notification("Press 'H' or '?' for help.", seconds=4.0)
+
+    def parse_events(self, client, world, clock):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return True
+            elif event.type == pygame.KEYUP:
+                if self._is_quit_shortcut(event.key):
+                    return True
+                elif event.key == K_BACKSPACE:
+                    world.restart()
+                elif event.key == K_F1:
+                    world.hud.toggle_info()
+                elif event.key == K_h or (event.key == K_SLASH and pygame.key.get_mods() & KMOD_SHIFT):
+                    world.hud.help.toggle()
+                elif event.key == K_TAB:
+                    world.camera_manager.toggle_camera()
+                elif event.key == K_c and pygame.key.get_mods() & KMOD_SHIFT:
+                    world.next_weather(reverse=True)
+                elif event.key == K_c:
+                    world.next_weather()
+                elif event.key == K_BACKQUOTE:
+                    world.camera_manager.next_sensor()
+                elif event.key > K_0 and event.key <= K_9:
+                    world.camera_manager.set_sensor(event.key - 1 - K_0)
+                elif event.key == K_r and not (pygame.key.get_mods() & KMOD_CTRL):
+                    world.camera_manager.toggle_recording()
+                elif event.key == K_r and (pygame.key.get_mods() & KMOD_CTRL):
+                    if (world.recording_enabled):
+                        client.stop_recorder()
+                        world.recording_enabled = False
+                        world.hud.notification("Recorder is OFF")
+                    else:
+                        client.start_recorder("manual_recording.rec")
+                        world.recording_enabled = True
+                        world.hud.notification("Recorder is ON")
+                elif event.key == K_p and (pygame.key.get_mods() & KMOD_CTRL):
+                    # stop recorder
+                    client.stop_recorder()
+                    world.recording_enabled = False
+                    # work around to fix camera at start of replaying
+                    currentIndex = world.camera_manager.index
+                    world.destroy_sensors()
+                    # disable autopilot
+                    self._autopilot_enabled = False
+                    world.player.set_autopilot(self._autopilot_enabled)
+                    world.hud.notification("Replaying file 'manual_recording.rec'")
+                    # replayer
+                    client.replay_file("manual_recording.rec", world.recording_start, 0, 0)
+                    world.camera_manager.set_sensor(currentIndex)
+                elif event.key == K_MINUS and (pygame.key.get_mods() & KMOD_CTRL):
+                    if pygame.key.get_mods() & KMOD_SHIFT:
+                        world.recording_start -= 10
+                    else:
+                        world.recording_start -= 1
+                    world.hud.notification("Recording start time is %d" % (world.recording_start))
+                elif event.key == K_EQUALS and (pygame.key.get_mods() & KMOD_CTRL):
+                    if pygame.key.get_mods() & KMOD_SHIFT:
+                        world.recording_start += 10
+                    else:
+                        world.recording_start += 1
+                    world.hud.notification("Recording start time is %d" % (world.recording_start))
+                if isinstance(self._control, carla.VehicleControl):
+                    if event.key == K_p and not (pygame.key.get_mods() & KMOD_CTRL):
+                        self._autopilot_enabled = not self._autopilot_enabled
+                        world.player.set_autopilot(self._autopilot_enabled)
+                        world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
+                    else:
+                        print("hahahha")
+        if not self._autopilot_enabled:
+            # Control loop
+            current_location = world.player.get_location()
+            current_waypoint = world.map.get_waypoint(current_location)
+            next_waypoint_list = []
+            distance = 10.0
+            while not next_waypoint_list:
+                next_waypoint_list = current_waypoint.next(distance)
+                distance = distance * 2
+            print(f"number of waypoints : {len(next_waypoint_list)}")
+            # current_location = world.player.get_location()
+            velocity_vec = world.player.get_velocity()
+            current_transform = world.player.get_transform()
+            current_location = current_transform.location
+            current_roration = current_transform.rotation
+            current_x = current_transform.location.x
+            current_y = current_transform.location.y
+            current_yaw = current_transform.rotation.yaw 
+            current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
+            print(f"Control input : speed : {current_speed}, current position : {current_x}, {current_y}, yaw : {current_yaw}")
+
+            world.player.set_transform(next_waypoint_list[0].transform)
+
+    def _parse_vehicle_keys(self, keys, milliseconds):
+        self._control.throttle = 1.0 if keys[K_UP] or keys[K_w] else 0.0
+        steer_increment = 5e-4 * milliseconds
+        if keys[K_LEFT] or keys[K_a]:
+            self._steer_cache -= steer_increment
+        elif keys[K_RIGHT] or keys[K_d]:
+            self._steer_cache += steer_increment
+        else:
+            self._steer_cache = 0.0
+        self._steer_cache = min(0.7, max(-0.7, self._steer_cache))
+        self._control.steer = round(self._steer_cache, 1)
+        self._control.brake = 1.0 if keys[K_DOWN] or keys[K_s] else 0.0
+        self._control.hand_brake = keys[K_SPACE]
+
+    def _parse_walker_keys(self, keys, milliseconds):
+        self._control.speed = 0.0
+        if keys[K_DOWN] or keys[K_s]:
+            self._control.speed = 0.0
+        if keys[K_LEFT] or keys[K_a]:
+            self._control.speed = .01
+            self._rotation.yaw -= 0.08 * milliseconds
+        if keys[K_RIGHT] or keys[K_d]:
+            self._control.speed = .01
+            self._rotation.yaw += 0.08 * milliseconds
+        if keys[K_UP] or keys[K_w]:
+            self._control.speed = 3.333 if pygame.key.get_mods() & KMOD_SHIFT else 2.778
+        self._control.jump = keys[K_SPACE]
+        self._rotation.yaw = round(self._rotation.yaw, 1)
+        self._control.direction = self._rotation.get_forward_vector()
+
+    @staticmethod
+    def _is_quit_shortcut(key):
+        return (key == K_ESCAPE) or (key == K_q and pygame.key.get_mods() & KMOD_CTRL)
+
+
+# ==============================================================================
+# -- HUD -----------------------------------------------------------------------
+# ==============================================================================
+
+
+class HUD(object):
+    def __init__(self, width, height):
+        self.dim = (width, height)
+        font = pygame.font.Font(pygame.font.get_default_font(), 20)
+        fonts = [x for x in pygame.font.get_fonts() if 'mono' in x]
+        default_font = 'ubuntumono'
+        mono = default_font if default_font in fonts else fonts[0]
+        mono = pygame.font.match_font(mono)
+        self._font_mono = pygame.font.Font(mono, 14)
+        self._notifications = FadingText(font, (width, 40), (0, height - 40))
+        self.help = HelpText(pygame.font.Font(mono, 24), width, height)
+        self.server_fps = 0
+        self.frame = 0
+        self.simulation_time = 0
+        self._show_info = True
+        self._info_text = []
+        self._server_clock = pygame.time.Clock()
+
+    def on_world_tick(self, timestamp):
+        self._server_clock.tick()
+        self.server_fps = self._server_clock.get_fps()
+        self.frame = timestamp.frame
+        self.simulation_time = timestamp.elapsed_seconds
+
+    def tick(self, world, clock):
+        self._notifications.tick(world, clock)
+        if not self._show_info:
+            return
+        t = world.player.get_transform()
+        v = world.player.get_velocity()
+        c = world.player.get_control()
+        heading = 'N' if abs(t.rotation.yaw) < 89.5 else ''
+        heading += 'S' if abs(t.rotation.yaw) > 90.5 else ''
+        heading += 'E' if 179.5 > t.rotation.yaw > 0.5 else ''
+        heading += 'W' if -0.5 > t.rotation.yaw > -179.5 else ''
+        colhist = world.collision_sensor.get_collision_history()
+        collision = [colhist[x + self.frame - 200] for x in range(0, 200)]
+        max_col = max(1.0, max(collision))
+        collision = [x / max_col for x in collision]
+        vehicles = world.world.get_actors().filter('vehicle.*')
+        self._info_text = [
+            'Server:  % 16.0f FPS' % self.server_fps,
+            'Client:  % 16.0f FPS' % clock.get_fps(),
+            '',
+            'Vehicle: % 20s' % get_actor_display_name(world.player, truncate=20),
+            'Map:     % 20s' % world.map.name,
+            'Simulation time: % 12s' % datetime.timedelta(seconds=int(self.simulation_time)),
+            '',
+            'Speed:   % 15.0f km/h' % (3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2)),
+            u'Heading:% 16.0f\N{DEGREE SIGN} % 2s' % (t.rotation.yaw, heading),
+            'Location:% 30s' % ('(% 5.1f, % 5.1f, % 5.1f)' % (t.location.x, t.location.y, t.location.z)),
+            'GNSS:% 24s' % ('(% 2.6f, % 3.6f)' % (world.gnss_sensor.lat, world.gnss_sensor.lon)),
+            'Height:  % 18.0f m' % t.location.z,
+            '']
+        if isinstance(c, carla.VehicleControl):
+            self._info_text += [
+                ('Throttle:', c.throttle, 0.0, 1.0),
+                ('Steer:', c.steer, -1.0, 1.0),
+                ('Brake:', c.brake, 0.0, 1.0),
+                ('Reverse:', c.reverse),
+                ('Hand brake:', c.hand_brake),
+                ('Manual:', c.manual_gear_shift),
+                'Gear:        %s' % {-1: 'R', 0: 'N'}.get(c.gear, c.gear)]
+        elif isinstance(c, carla.WalkerControl):
+            self._info_text += [
+                ('Speed:', c.speed, 0.0, 5.556),
+                ('Jump:', c.jump)]
+        self._info_text += [
+            '',
+            'Collision:',
+            collision,
+            '',
+            'Number of vehicles: % 8d' % len(vehicles)]
+        if len(vehicles) > 1:
+            self._info_text += ['Nearby vehicles:']
+            distance = lambda l: math.sqrt((l.x - t.location.x)**2 + (l.y - t.location.y)**2 + (l.z - t.location.z)**2)
+            vehicles = [(distance(x.get_location()), x) for x in vehicles if x.id != world.player.id]
+            for d, vehicle in sorted(vehicles):
+                if d > 200.0:
+                    break
+                vehicle_type = get_actor_display_name(vehicle, truncate=22)
+                self._info_text.append('% 4dm %s' % (d, vehicle_type))
+
+    def toggle_info(self):
+        self._show_info = not self._show_info
+
+    def notification(self, text, seconds=2.0):
+        self._notifications.set_text(text, seconds=seconds)
+
+    def error(self, text):
+        self._notifications.set_text('Error: %s' % text, (255, 0, 0))
+
+    def render(self, display):
+        if self._show_info:
+            info_surface = pygame.Surface((220, self.dim[1]))
+            info_surface.set_alpha(100)
+            display.blit(info_surface, (0, 0))
+            v_offset = 4
+            bar_h_offset = 100
+            bar_width = 106
+            for item in self._info_text:
+                if v_offset + 18 > self.dim[1]:
+                    break
+                if isinstance(item, list):
+                    if len(item) > 1:
+                        points = [(x + 8, v_offset + 8 + (1.0 - y) * 30) for x, y in enumerate(item)]
+                        pygame.draw.lines(display, (255, 136, 0), False, points, 2)
+                    item = None
+                    v_offset += 18
+                elif isinstance(item, tuple):
+                    if isinstance(item[1], bool):
+                        rect = pygame.Rect((bar_h_offset, v_offset + 8), (6, 6))
+                        pygame.draw.rect(display, (255, 255, 255), rect, 0 if item[1] else 1)
+                    else:
+                        rect_border = pygame.Rect((bar_h_offset, v_offset + 8), (bar_width, 6))
+                        pygame.draw.rect(display, (255, 255, 255), rect_border, 1)
+                        f = (item[1] - item[2]) / (item[3] - item[2])
+                        if item[2] < 0.0:
+                            rect = pygame.Rect((bar_h_offset + f * (bar_width - 6), v_offset + 8), (6, 6))
+                        else:
+                            rect = pygame.Rect((bar_h_offset, v_offset + 8), (f * bar_width, 6))
+                        pygame.draw.rect(display, (255, 255, 255), rect)
+                    item = item[0]
+                if item:  # At this point has to be a str.
+                    surface = self._font_mono.render(item, True, (255, 255, 255))
+                    display.blit(surface, (8, v_offset))
+                v_offset += 18
+        self._notifications.render(display)
+        self.help.render(display)
+
+
+# ==============================================================================
+# -- FadingText ----------------------------------------------------------------
+# ==============================================================================
+
+
+class FadingText(object):
+    def __init__(self, font, dim, pos):
+        self.font = font
+        self.dim = dim
+        self.pos = pos
+        self.seconds_left = 0
+        self.surface = pygame.Surface(self.dim)
+
+    def set_text(self, text, color=(255, 255, 255), seconds=2.0):
+        text_texture = self.font.render(text, True, color)
+        self.surface = pygame.Surface(self.dim)
+        self.seconds_left = seconds
+        self.surface.fill((0, 0, 0, 0))
+        self.surface.blit(text_texture, (10, 11))
+
+    def tick(self, _, clock):
+        delta_seconds = 1e-3 * clock.get_time()
+        self.seconds_left = max(0.0, self.seconds_left - delta_seconds)
+        self.surface.set_alpha(500.0 * self.seconds_left)
+
+    def render(self, display):
+        display.blit(self.surface, self.pos)
+
+
+# ==============================================================================
+# -- HelpText ------------------------------------------------------------------
+# ==============================================================================
+
+
+class HelpText(object):
+    def __init__(self, font, width, height):
+        lines = __doc__.split('\n')
+        self.font = font
+        self.dim = (680, len(lines) * 22 + 12)
+        self.pos = (0.5 * width - 0.5 * self.dim[0], 0.5 * height - 0.5 * self.dim[1])
+        self.seconds_left = 0
+        self.surface = pygame.Surface(self.dim)
+        self.surface.fill((0, 0, 0, 0))
+        for n, line in enumerate(lines):
+            text_texture = self.font.render(line, True, (255, 255, 255))
+            self.surface.blit(text_texture, (22, n * 22))
+            self._render = False
+        self.surface.set_alpha(220)
+
+    def toggle(self):
+        self._render = not self._render
+
+    def render(self, display):
+        if self._render:
+            display.blit(self.surface, self.pos)
+
+
+# ==============================================================================
+# -- CollisionSensor -----------------------------------------------------------
+# ==============================================================================
+
+
+class CollisionSensor(object):
+    def __init__(self, parent_actor, hud):
+        self.sensor = None
+        self.history = []
+        self._parent = parent_actor
+        self.hud = hud
+        world = self._parent.get_world()
+        bp = world.get_blueprint_library().find('sensor.other.collision')
+        self.sensor = world.spawn_actor(bp, carla.Transform(), attach_to=self._parent)
+        # We need to pass the lambda a weak reference to self to avoid circular
+        # reference.
+        weak_self = weakref.ref(self)
+        self.sensor.listen(lambda event: CollisionSensor._on_collision(weak_self, event))
+
+    def get_collision_history(self):
+        history = collections.defaultdict(int)
+        for frame, intensity in self.history:
+            history[frame] += intensity
+        return history
+
+    @staticmethod
+    def _on_collision(weak_self, event):
+        self = weak_self()
+        if not self:
+            return
+        actor_type = get_actor_display_name(event.other_actor)
+        self.hud.notification('Collision with %r' % actor_type)
+        impulse = event.normal_impulse
+        intensity = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
+        self.history.append((event.frame, intensity))
+        if len(self.history) > 4000:
+            self.history.pop(0)
+
+
+# ==============================================================================
+# -- LaneInvasionSensor --------------------------------------------------------
+# ==============================================================================
+
+
+class LaneInvasionSensor(object):
+    def __init__(self, parent_actor, hud):
+        self.sensor = None
+        self._parent = parent_actor
+        self.hud = hud
+        world = self._parent.get_world()
+        bp = world.get_blueprint_library().find('sensor.other.lane_invasion')
+        self.sensor = world.spawn_actor(bp, carla.Transform(), attach_to=self._parent)
+        # We need to pass the lambda a weak reference to self to avoid circular
+        # reference.
+        weak_self = weakref.ref(self)
+        self.sensor.listen(lambda event: LaneInvasionSensor._on_invasion(weak_self, event))
+
+    @staticmethod
+    def _on_invasion(weak_self, event):
+        self = weak_self()
+        if not self:
+            return
+        lane_types = set(x.type for x in event.crossed_lane_markings)
+        text = ['%r' % str(x).split()[-1] for x in lane_types]
+        self.hud.notification('Crossed line %s' % ' and '.join(text))
+
+# ==============================================================================
+# -- GnssSensor --------------------------------------------------------
+# ==============================================================================
+
+
+class GnssSensor(object):
+    def __init__(self, parent_actor):
+        self.sensor = None
+        self._parent = parent_actor
+        self.lat = 0.0
+        self.lon = 0.0
+        world = self._parent.get_world()
+        bp = world.get_blueprint_library().find('sensor.other.gnss')
+        self.sensor = world.spawn_actor(bp, carla.Transform(carla.Location(x=1.0, z=2.8)), attach_to=self._parent)
+        # We need to pass the lambda a weak reference to self to avoid circular
+        # reference.
+        weak_self = weakref.ref(self)
+        self.sensor.listen(lambda event: GnssSensor._on_gnss_event(weak_self, event))
+
+    @staticmethod
+    def _on_gnss_event(weak_self, event):
+        self = weak_self()
+        if not self:
+            return
+        self.lat = event.latitude
+        self.lon = event.longitude
+
+
+# ==============================================================================
+# -- CameraManager -------------------------------------------------------------
+# ==============================================================================
+
+
+class CameraManager(object):
+    def __init__(self, parent_actor, hud, gamma_correction):
+        self.sensor = None
+        self.surface = None
+        self._parent = parent_actor
+        self.hud = hud
+        self.recording = False
+        bound_y = 0.5 + self._parent.bounding_box.extent.y
+        Attachment = carla.AttachmentType
+        self._camera_transforms = [
+            (carla.Transform(carla.Location(x=-5.5, z=2.5), carla.Rotation(pitch=8.0)), Attachment.SpringArm),
+            (carla.Transform(carla.Location(x=1.6, z=1.7)), Attachment.Rigid),
+            (carla.Transform(carla.Location(x=5.5, y=1.5, z=1.5)), Attachment.SpringArm),
+            (carla.Transform(carla.Location(x=-8.0, z=6.0), carla.Rotation(pitch=6.0)), Attachment.SpringArm),
+            (carla.Transform(carla.Location(x=-1, y=-bound_y, z=0.5)), Attachment.Rigid)]
+        self.transform_index = 1
+        self.sensors = [
+            ['sensor.camera.rgb', cc.Raw, 'Camera RGB'],
+            ['sensor.camera.depth', cc.Raw, 'Camera Depth (Raw)'],
+            ['sensor.camera.depth', cc.Depth, 'Camera Depth (Gray Scale)'],
+            ['sensor.camera.depth', cc.LogarithmicDepth, 'Camera Depth (Logarithmic Gray Scale)'],
+            ['sensor.camera.semantic_segmentation', cc.Raw, 'Camera Semantic Segmentation (Raw)'],
+            ['sensor.camera.semantic_segmentation', cc.CityScapesPalette,
+                'Camera Semantic Segmentation (CityScapes Palette)'],
+            ['sensor.lidar.ray_cast', None, 'Lidar (Ray-Cast)']]
+        world = self._parent.get_world()
+        bp_library = world.get_blueprint_library()
+        for item in self.sensors:
+            bp = bp_library.find(item[0])
+            if item[0].startswith('sensor.camera'):
+                bp.set_attribute('image_size_x', str(hud.dim[0]))
+                bp.set_attribute('image_size_y', str(hud.dim[1]))
+                if bp.has_attribute('gamma'):
+                    bp.set_attribute('gamma', str(gamma_correction))
+            elif item[0].startswith('sensor.lidar'):
+                bp.set_attribute('range', '5000')
+            item.append(bp)
+        self.index = None
+
+    def toggle_camera(self):
+        self.transform_index = (self.transform_index + 1) % len(self._camera_transforms)
+        self.set_sensor(self.index, notify=False, force_respawn=True)
+
+    def set_sensor(self, index, notify=True, force_respawn=False):
+        index = index % len(self.sensors)
+        needs_respawn = True if self.index is None else \
+            (force_respawn or (self.sensors[index][0] != self.sensors[self.index][0]))
+        if needs_respawn:
+            if self.sensor is not None:
+                self.sensor.destroy()
+                self.surface = None
+            self.sensor = self._parent.get_world().spawn_actor(
+                self.sensors[index][-1],
+                self._camera_transforms[self.transform_index][0],
+                attach_to=self._parent,
+                attachment_type=self._camera_transforms[self.transform_index][1])
+            # We need to pass the lambda a weak reference to self to avoid
+            # circular reference.
+            weak_self = weakref.ref(self)
+            self.sensor.listen(lambda image: CameraManager._parse_image(weak_self, image))
+        if notify:
+            self.hud.notification(self.sensors[index][2])
+        self.index = index
+
+    def next_sensor(self):
+        self.set_sensor(self.index + 1)
+
+    def toggle_recording(self):
+        self.recording = not self.recording
+        self.hud.notification('Recording %s' % ('On' if self.recording else 'Off'))
+
+    def render(self, display):
+        if self.surface is not None:
+            display.blit(self.surface, (0, 0))
+
+    @staticmethod
+    def _parse_image(weak_self, image):
+        self = weak_self()
+        if not self:
+            return
+        if self.sensors[self.index][0].startswith('sensor.lidar'):
+            points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
+            points = np.reshape(points, (int(points.shape[0] / 3), 3))
+            lidar_data = np.array(points[:, :2])
+            lidar_data *= min(self.hud.dim) / 100.0
+            lidar_data += (0.5 * self.hud.dim[0], 0.5 * self.hud.dim[1])
+            lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
+            lidar_data = lidar_data.astype(np.int32)
+            lidar_data = np.reshape(lidar_data, (-1, 2))
+            lidar_img_size = (self.hud.dim[0], self.hud.dim[1], 3)
+            lidar_img = np.zeros((lidar_img_size), dtype = int)
+            lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
+            self.surface = pygame.surfarray.make_surface(lidar_img)
+        else:
+            image.convert(self.sensors[self.index][1])
+            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+            array = np.reshape(array, (image.height, image.width, 4))
+            array = array[:, :, :3]
+            array = array[:, :, ::-1]
+            self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
+        if self.recording:
+            image.save_to_disk('_out/%08d' % image.frame)
+
+
+# ==============================================================================
+# -- game_loop() ---------------------------------------------------------------
+# ==============================================================================
+
+
+def game_loop(args):
+    pygame.init()
+    pygame.font.init()
+    world = None
+
+    try:
+        client = carla.Client(args.host, args.port)
+        client.set_timeout(2.0)
+
+        display = pygame.display.set_mode(
+            (args.width, args.height),
+            pygame.HWSURFACE | pygame.DOUBLEBUF)
+
+        hud = HUD(args.width, args.height)
+        carla_world = client.load_world(args.map)
+        world = World(carla_world, hud, args)
+        controller = VehicleControl(world, args.autopilot)
+
+        clock = pygame.time.Clock()
+        while True:
+            clock.tick_busy_loop(60)
+            if controller.parse_events(client, world, clock):
+                return
+            world.tick(clock)
+            world.render(display)
+            pygame.display.flip()
+
+    finally:
+
+        if (world and world.recording_enabled):
+            client.stop_recorder()
+
+        if world is not None:
+            world.destroy()
+
+        pygame.quit()
+
+
+# ==============================================================================
+# -- main() --------------------------------------------------------------------
+# ==============================================================================
+
 
 def main():
-    """Main function.
-
-    Args:
-        -v, --verbose: print debug information
-        --host: IP of the host server (default: localhost)
-        -p, --port: TCP port to listen to (default: 2000)
-        -a, --autopilot: enable autopilot
-        -q, --quality-level: graphics quality level [Low or Epic]
-        -i, --images-to-disk: save images to disk
-        -c, --carla-settings: Path to CarlaSettings.ini file
-    """
-    argparser = argparse.ArgumentParser(description=__doc__)
+    argparser = argparse.ArgumentParser(
+        description='CARLA Manual Control Client')
     argparser.add_argument(
         '-v', '--verbose',
         action='store_true',
@@ -696,8 +844,8 @@ def main():
     argparser.add_argument(
         '--host',
         metavar='H',
-        default='localhost',
-        help='IP of the host server (default: localhost)')
+        default='127.0.0.1',
+        help='IP of the host server (default: 127.0.0.1)')
     argparser.add_argument(
         '-p', '--port',
         metavar='P',
@@ -709,46 +857,71 @@ def main():
         action='store_true',
         help='enable autopilot')
     argparser.add_argument(
-        '-q', '--quality-level',
-        choices=['Low', 'Epic'],
-        type=lambda s: s.title(),
-        default='Low',
-        help='graphics quality level.')
+        '--res',
+        metavar='WIDTHxHEIGHT',
+        default='1280x720',
+        help='window resolution (default: 1280x720)')
     argparser.add_argument(
-        '-c', '--carla-settings',
-        metavar='PATH',
-        dest='settings_filepath',
-        default=None,
-        help='Path to a "CarlaSettings.ini" file')
+        '--filter',
+        metavar='PATTERN',
+        default='vehicle.*',
+        help='actor filter (default: "vehicle.*")')
     argparser.add_argument(
-        '-cont', '--controller',
-        metavar='CONT',
-        default='mpc',
-        help='Path to a "CarlaSettings.ini" file')
+        '--rolename',
+        metavar='NAME',
+        default='hero',
+        help='actor role name (default: "hero")')
+    argparser.add_argument(
+        '--gamma',
+        default=2.2,
+        type=float,
+        help='Gamma correction of the camera (default: 2.2)')
+    argparser.add_argument(
+        '--map',
+        metavar='NAME',
+        default='Town04',
+        help='simulation map (default: "Town04")')
+    argparser.add_argument(
+        '--spawn_x',
+        metavar='x',
+        default='4.9',
+        help='x position to spawn the agent')
+    argparser.add_argument(
+        '--spawn_y',
+        metavar='y',
+        default='0.0',
+        help='y position to spawn the agent')
+    argparser.add_argument(
+        '--spawn_yaw',
+        metavar='Y',
+        default='-90.0',
+        help='Yaw position to spawn the agent')
+    argparser.add_argument(
+        '--vehicle_id',
+        metavar='NAME',
+        default='vehicle.audi.etron',
+        help='vehicle to spanw')
+
+
     args = argparser.parse_args()
 
-    # Logging startup info
+    args.width, args.height = [int(x) for x in args.res.split('x')]
+
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(format='%(levelname)s: %(message)s', level=log_level)
+
     logging.info('listening to server %s:%s', args.host, args.port)
 
-    args.out_filename_format = '_out/episode_{:0>4d}/{:s}/{:0>6d}'
-
-    # Execute when server connection is established
-    while True:
-        try:
-            exec_waypoint_nav_demo(args)
-            print('Done.')
-            return
-
-        except TCPConnectionError as error:
-            logging.error(error)
-            time.sleep(1)
-
-if __name__ == '__main__':
+    print(__doc__)
 
     try:
-        main()
+
+        game_loop(args)
+
     except KeyboardInterrupt:
         print('\nCancelled by user. Bye!')
 
+
+if __name__ == '__main__':
+
+    main()

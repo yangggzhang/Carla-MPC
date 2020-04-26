@@ -1,3 +1,4 @@
 CarlaSimulator/
 *.zip
 *.pyc
+src/controller_output/

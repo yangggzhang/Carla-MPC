@@ -8,7 +8,7 @@ import cutils
 import numpy as np
 
 class Controller(object):
-    def __init__(self, waypoints):
+    def __init__(self, waypoints = None):
         self.vars                = cutils.CUtils()
         self._current_x          = 0
         self._current_y          = 0
@@ -35,6 +35,7 @@ class Controller(object):
         self._current_frame     = frame
         if self._current_frame:
             self._start_control_loop = True
+        return self._start_control_loop
 
     def update_desired_speed(self):
         min_idx       = 0
@@ -153,7 +154,7 @@ class Controller(object):
                 
                 Controller Output Variables:
                     throttle_output : Throttle output (0 to 1)
-                    steer_output    : Steer output (-1.22 rad to 1.22 rad)
+                    steer_output    : Steer output (-1.0 rad to 1.0 rad)
                     brake_output    : Brake output (0 to 1)
             """
 
@@ -175,6 +176,7 @@ class Controller(object):
             brake_output    = 0
 
             # pid control
+            print(f"time : t : {t}, prev_t : {self.vars.t_previous}")
             st = t - self.vars.t_previous
 
             # error term
@@ -237,10 +239,11 @@ class Controller(object):
                 crosstrack_error = abs(crosstrack_error)
             else:
                 crosstrack_error = - abs(crosstrack_error)
+            print()
 
             yaw_diff_crosstrack = np.arctan(k_e * crosstrack_error / (k_v + v))
             
-            print(crosstrack_error, yaw_diff, yaw_diff_crosstrack)
+            print(f"steer controller : {yaw_diff} ,{crosstrack_error}")
 
             # 3. control low
             steer_expect = yaw_diff + yaw_diff_crosstrack
@@ -248,8 +251,8 @@ class Controller(object):
                 steer_expect -= 2 * np.pi
             if steer_expect < - np.pi:
                 steer_expect += 2 * np.pi
-            steer_expect = min(1.22, steer_expect)
-            steer_expect = max(-1.22, steer_expect)
+            steer_expect = min(1.0, steer_expect)
+            steer_expect = max(-1.0, steer_expect)
 
             # 4. update
             steer_output = steer_expect
@@ -260,7 +263,7 @@ class Controller(object):
             # SET CONTROLS OUTPUT
             ######################################################
             self.set_throttle(throttle_output)  # in percent (0 to 1)
-            self.set_steer(steer_output)        # in rad (-1.22 to 1.22)
+            self.set_steer(steer_output)        # in rad (-1.0 to 1.0)
             self.set_brake(brake_output)        # in percent (0 to 1)
 
         ######################################################

@@ -119,6 +119,8 @@ try:
 except ImportError:
     raise RuntimeError('cannot import numpy, make sure numpy package is installed')
 
+import Controller.PIDController as PIDController
+import Controller.MPCController as MPCController
 
 # ==============================================================================
 # -- Global functions ----------------------------------------------------------
@@ -162,6 +164,13 @@ class World(object):
         self.world.on_tick(hud.on_world_tick)
         self.recording_enabled = False
         self.recording_start = 0
+        self.waypoint_resolution = args.waypoint_resolution
+        self.waypoint_lookahead_distance = args.waypoint_lookahead_distance
+        self.desired_speed = args.desired_speed
+        if args.control_mode == "PID":
+            self.controller = PIDController.Controller()
+        elif args.control_mode == "MPC":
+            self.controller = MPCController.Controller()
 
     def restart(self):
         # Keep same camera config if the camera manager exists.
@@ -203,7 +212,21 @@ class World(object):
             spawn_point.location.z = 1.0
             spawn_point.rotation.yaw = float(self.args.spawn_yaw)
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
-      
+            if self.args.control_mode == "PID":
+                self.controller = PIDController.Controller()
+            elif self.args.control_mode == "MPC":
+                self.controller = MPCController.Controller()
+            velocity_vec = self.player.get_velocity()
+            current_transform = self.player.get_transform()
+            current_location = current_transform.location
+            current_roration = current_transform.rotation
+            current_x = current_transform.location.x
+            current_y = current_transform.location.y
+            current_yaw = current_transform.rotation.yaw / 180.0 * np.pi
+            current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
+            frame, current_timestamp =self.hud.get_simulation_information()
+            self.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
+
         # Set up the sensors.
         self.collision_sensor = CollisionSensor(self.player, self.hud)
         self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
@@ -333,14 +356,15 @@ class VehicleControl(object):
                         print("hahahha")
         if not self._autopilot_enabled:
             # Control loop
+            # get waypoints
             current_location = world.player.get_location()
             current_waypoint = world.map.get_waypoint(current_location)
-            next_waypoint_list = []
-            distance = 10.0
-            while not next_waypoint_list:
-                next_waypoint_list = current_waypoint.next(distance)
-                distance = distance * 2
-            print(f"number of waypoints : {len(next_waypoint_list)}")
+            next_waypoint = current_waypoint.next(1.0)
+            waypoints = []
+            for i in range(int(world.waypoint_lookahead_distance / world.waypoint_resolution)):
+                waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, world.desired_speed])
+                current_waypoint = current_waypoint.next(world.waypoint_resolution)[0]
+            # print(f"number of waypoints : {len(next_waypoint_list)}")
             # current_location = world.player.get_location()
             velocity_vec = world.player.get_velocity()
             current_transform = world.player.get_transform()
@@ -348,11 +372,18 @@ class VehicleControl(object):
             current_roration = current_transform.rotation
             current_x = current_transform.location.x
             current_y = current_transform.location.y
-            current_yaw = current_transform.rotation.yaw 
+            current_yaw = current_transform.rotation.yaw / 180.0 * np.pi
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
             print(f"Control input : speed : {current_speed}, current position : {current_x}, {current_y}, yaw : {current_yaw}")
-
-            world.player.set_transform(next_waypoint_list[0].transform)
+            frame, current_timestamp =world.hud.get_simulation_information()
+            world.controller.update_waypoints(waypoints)
+            ready_to_go = world.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
+            if ready_to_go:
+                world.controller.update_controls()
+                self._control.throttle, self._control.steer, self._control.brake = world.controller.get_commands()
+                print(f"Control command - throttle : {self._control.throttle}, steer : {self._control.steer}, brake : {self._control.brake} ")
+                world.player.apply_control(self._control)
+            # world.player.set_transform(current_waypoint.transform)
 
     def _parse_vehicle_keys(self, keys, milliseconds):
         self._control.throttle = 1.0 if keys[K_UP] or keys[K_w] else 0.0
@@ -417,6 +448,9 @@ class HUD(object):
         self.server_fps = self._server_clock.get_fps()
         self.frame = timestamp.frame
         self.simulation_time = timestamp.elapsed_seconds
+    
+    def get_simulation_information(self):
+        return self.frame, self.simulation_time
 
     def tick(self, world, clock):
         self._notifications.tick(world, clock)
@@ -810,7 +844,7 @@ def game_loop(args):
 
         clock = pygame.time.Clock()
         while True:
-            clock.tick_busy_loop(60)
+            clock.tick_busy_loop(args.FPS)
             if controller.parse_events(client, world, clock):
                 return
             world.tick(clock)
@@ -895,14 +929,42 @@ def main():
         '--spawn_yaw',
         metavar='Y',
         default='-90.0',
+        type=float,
         help='Yaw position to spawn the agent')
     argparser.add_argument(
         '--vehicle_id',
         metavar='NAME',
         default='vehicle.audi.etron',
-        help='vehicle to spanw')
-
-
+        help='vehicle to spawn')
+    argparser.add_argument(
+        '--waypoint_resolution',
+        metavar='WR',
+        default='0.01',
+        type=float,
+        help='waypoint resulution for control')
+    argparser.add_argument(
+        '--waypoint_lookahead_distance',
+        metavar='WLD',
+        default='20.0',
+        type=float,
+        help='waypoint look ahead distance for control')
+    argparser.add_argument(
+        '--desired_speed',
+        metavar='SPEED',
+        default='30.0',
+        type=float,
+        help='desired speed for highway driving')
+    argparser.add_argument(
+        '--control_mode',
+        metavar='CMODE',
+        default='PID',
+        help='Controller option (Default : PID)')
+    argparser.add_argument(
+        '--FPS',
+        metavar='FPS',
+        default='10',
+        type=int,
+        help='Frame per second for simulation')
     args = argparser.parse_args()
 
     args.width, args.height = [int(x) for x in args.res.split('x')]

@@ -8,51 +8,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from Controller.MPC import MPC
 from Controller.LongitudinalPID import LongitudinalPID
-
-# class LongitudinalPID:
-#     """
-#     PID controller for longitudinal control
-#     """
-#     def __init__(self, v=0, L=3, Kp=1, Kd=0.01, Ki=0.01,
-#                  integrator_min=None, integrator_max=None):
-#         # States
-#         self.v = v
-#         self.prev_error = 0
-#         self.sum_error = 0
-
-#         # Wheel base
-#         self.L = L
-
-#         # Control gain
-#         self.Kp = Kp
-#         self.Ki = Ki
-#         self.Kd = Kd
-
-#         self.integrator_min = integrator_min
-#         self.integrator_max = integrator_max
-
-#     def update_speed(self, v):
-#         self.v = v
-
-#     def get_throttle_input(self, v, dt, target_speed):
-#         self.update_speed(v)
-
-#         error = target_speed - self.v
-#         self.sum_error += error * dt
-#         if self.integrator_min is not None:
-#             self.sum_error = np.fmax(self.sum_error,
-#                                      self.integrator_min)
-#         if self.integrator_max is not None:
-#             self.sum_error = np.fmin(self.sum_error,
-#                                      self.integrator_max)
-
-#         throttle = self.Kp * error + \
-#             self.Ki * self.sum_error + \
-#             self.Kd * (error - self.prev_error) / dt
-#         self.prev_error = error
-
-#         return throttle
-
+from Controller.MPCParams import MPCParams
 
 class Controller(object):
     def __init__(self, waypoints, controller_type="MPC"):
@@ -83,10 +39,9 @@ class Controller(object):
         R = 0.01*np.eye(2)
         Qf = 5*np.eye(4)
         Rd = np.eye(2)
-        self.controller = MPC(x=self._current_x, y=self._current_y, yaw=self._current_yaw,
-                                v=self._current_speed, delta=0,
-                                L=2, Q=Q, R=R, Qf=Qf, Rd=Rd,
-                                len_horizon=10)
+        self.controller = MPC(  x = self._current_x, y = self._current_y, yaw = self._current_yaw, v = self._current_speed, delta = 0,
+                                L = MPCParams.L, Q = MPCParams.Q, R = MPCParams.R, Qf = MPCParams.Qf, Rd = MPCParams.Rd, len_horizon = MPCParams.len_horizon,
+                                steer_rate_max = MPCParams.steer_rate_max, a_max = MPCParams.a_max, a_min = MPCParams.a_min, a_rate_max = MPCParams.a_rate_max, v_min = MPCParams.v_min, v_max = MPCParams.v_max)
 
     def update_values(self, x, y, yaw, speed, timestamp, frame):
         self._current_x = x
@@ -229,6 +184,13 @@ class Controller(object):
             ######################################################
             # SET CONTROLS OUTPUT
             ######################################################
+        if acceleration > 0:
+            throttle_output = acceleration / MPCParams.a_max
+            brake_output = 0.0
+        else:
+            throttle_output = 0.0
+            brake_output = acceleration / MPCParams.a_min  
+        print(f"Control input , throttle : {throttle_output}, brake : {brake_output}, acceleration : {acceleration}")
         self.set_throttle(throttle_output)  # in percent (0 to 1)
         self.set_steer(steer_output)        # in rad (-1.22 to 1.22)
         self.set_brake(brake_output)        # in percent (0 to 1)

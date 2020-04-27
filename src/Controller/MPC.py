@@ -10,7 +10,7 @@ class MPC:
     def __init__(self, x=0, y=0, yaw=0, v=0, delta=0,
                  max_steering_angle=1.22, L=3, Q=np.eye(4), Qf=np.eye(4),
                  R=np.eye(2), Rd=np.eye(2), len_horizon=5, a_max=2, a_min=-1,
-                 a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=80, time_step = 0.1):
+                 a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=80, dist = 1.5, time_step = 0.1):
 
         # States
         self.x = x
@@ -42,11 +42,13 @@ class MPC:
         self.a_min = a_min
         self.a_rate_max = a_rate_max
         self.steer_rate_max = steer_rate_max
+        self.dist = dist
 
         self.prev_idx = 0
         self.send_prev = 0
         self.prev_accelerations = np.array([0.0] * self.len_horizon)
         self.prev_deltas = np.array([0.0] * self.len_horizon)
+        self.prev_index = 0
 
     def update_position(self, x, y):
         self.x = x
@@ -111,7 +113,7 @@ class MPC:
             cost += cvxpy.quad_form(u[:, i], self.R)
 
             ## Constraints
-            A, B, C = self.get_linearized_dynamics(z_ref[3, i], self.prev_deltas[0],
+            A, B, C = self.get_linearized_dynamics(z_ref[3, i], self.prev_deltas[np.min([ i + 1, len(self.prev_deltas) - 1])],
                                                    z_ref[2, i], dt)
             constraints += [z[:, i+1] == A @ z[:, i] + B @ u[:, i] + C.flatten()]
 
@@ -124,6 +126,10 @@ class MPC:
             constraints += [u[0, i] <= self.a_max]
             constraints += [u[1, i] <= self.max_steering_angle]
             constraints += [u[1, i] >= -self.max_steering_angle]
+            constraints += [(z[0, i] - z_ref[0, i])*np.sin(z_ref[3,i]) <= self.dist]
+            constraints += [(z[0, i] - z_ref[0, i])*np.sin(z_ref[3,i]) >= -self.dist]
+            constraints += [(z[1, i] - z_ref[1, i])*np.cos(z_ref[3,i]) <= self.dist]
+            constraints += [(z[1, i] - z_ref[1, i])*np.cos(z_ref[3,i]) >= -self.dist]
 
             # Rate of change of input limit
             if i != 0:
@@ -148,9 +154,10 @@ class MPC:
             a = np.array(u.value[0, :]).flatten()
             delta = np.array(u.value[1, :]).flatten()
         else:
-            x, y, v, yaw, a, delta = None, None, None, None, None, None
+            # x, y, v, yaw, a, delta = None, None, None, None, None, None
+            a, delta = None, None
 
-        return x, y, v, yaw, a, delta
+        return a, delta
 
     def get_ref_traj(self, cx, cy, cyaw, ck, vel, prev_idx, dt=0.01):
         x_ref = np.zeros((4, self.len_horizon+1))
@@ -196,7 +203,13 @@ class MPC:
 
         x0 = np.array([[x], [y], [v], [yaw]])
 
-        xs, ys, vs, yaws, self.prev_accelerations, self.prev_deltas = \
-            self.linear_mpc(waypoints, x0, self.prev_deltas, dt=self.time_step)
+        accelerations, deltas = self.linear_mpc(waypoints, x0, self.prev_deltas, dt=self.time_step)
 
-        return self.prev_accelerations[0], self.prev_deltas[0], xs, ys, vs, yaws
+        if accelerations is None:
+            self.prev_accelerations = self.prev_accelerations[1:]
+            self.prev_deltas = self.prev_deltas[1:]
+        else:
+            self.prev_accelerations = accelerations
+            self.prev_deltas = deltas
+
+        return self.prev_accelerations[0], self.prev_deltas[0]

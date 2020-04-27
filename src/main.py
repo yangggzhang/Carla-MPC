@@ -130,7 +130,7 @@ def wrap_angle(angle_in_degree):
     angle_in_rad = angle_in_degree / 180.0 * np.pi
     while (angle_in_rad > np.pi):
         angle_in_rad -= 2 * np.pi
-    while (angle_in_rad < -np.pi):
+    while (angle_in_rad <= -np.pi):
         angle_in_rad += 2 * np.pi
     return angle_in_rad
 
@@ -175,6 +175,7 @@ class World(object):
         self.time_step = args.time_step
         self.control_mode = args.control_mode
         self.controller = None
+        self.control_count = 0.0
         self.restart()
         self.world.on_tick(hud.on_world_tick)
         self.recording_enabled = False
@@ -212,15 +213,24 @@ class World(object):
             self.destroy()
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
         while self.player is None:
-            # spawn_points = self.map.get_spawn_points()
+            if self.args.random_spawn == 1:
+                print(f"Random spawn!")
+                spawn_points = self.world.get_map().get_spawn_points()
+                spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
+                self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            else:
+                spawn_location = carla.Location()
+                spawn_location.x = float(self.args.spawn_x)
+                spawn_location.y = float(self.args.spawn_y)
+                spawn_waypoint = self.map.get_waypoint(spawn_location)
+                spawn_transform = spawn_waypoint.transform
+                spawn_transform.location.z = 1.0
+                self.player = self.world.try_spawn_actor(blueprint, spawn_transform)
+
+            # spawn_points = self.world.get_map().get_spawn_points()
             # spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
-            spawn_location = carla.Location()
-            spawn_location.x = float(self.args.spawn_x)
-            spawn_location.y = float(self.args.spawn_y)
-            spawn_waypoint = self.map.get_waypoint(spawn_location)
-            spawn_transform = spawn_waypoint.transform
-            spawn_transform.location.z = 1.0
-            self.player = self.world.try_spawn_actor(blueprint, spawn_transform)
+            # self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            self.control_count = 0
             if self.control_mode == "PID":
                 self.controller = PIDController.Controller()
             elif self.control_mode == "MPC":
@@ -301,70 +311,70 @@ class VehicleControl(object):
         world.hud.notification("Press 'H' or '?' for help.", seconds=4.0)
 
     def parse_events(self, client, world, clock):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return True
-            elif event.type == pygame.KEYUP:
-                if self._is_quit_shortcut(event.key):
-                    return True
-                elif event.key == K_BACKSPACE:
-                    world.restart()
-                elif event.key == K_F1:
-                    world.hud.toggle_info()
-                elif event.key == K_h or (event.key == K_SLASH and pygame.key.get_mods() & KMOD_SHIFT):
-                    world.hud.help.toggle()
-                elif event.key == K_TAB:
-                    world.camera_manager.toggle_camera()
-                elif event.key == K_c and pygame.key.get_mods() & KMOD_SHIFT:
-                    world.next_weather(reverse=True)
-                elif event.key == K_c:
-                    world.next_weather()
-                elif event.key == K_BACKQUOTE:
-                    world.camera_manager.next_sensor()
-                elif event.key > K_0 and event.key <= K_9:
-                    world.camera_manager.set_sensor(event.key - 1 - K_0)
-                elif event.key == K_r and not (pygame.key.get_mods() & KMOD_CTRL):
-                    world.camera_manager.toggle_recording()
-                elif event.key == K_r and (pygame.key.get_mods() & KMOD_CTRL):
-                    if (world.recording_enabled):
-                        client.stop_recorder()
-                        world.recording_enabled = False
-                        world.hud.notification("Recorder is OFF")
-                    else:
-                        client.start_recorder("manual_recording.rec")
-                        world.recording_enabled = True
-                        world.hud.notification("Recorder is ON")
-                elif event.key == K_p and (pygame.key.get_mods() & KMOD_CTRL):
-                    # stop recorder
-                    client.stop_recorder()
-                    world.recording_enabled = False
-                    # work around to fix camera at start of replaying
-                    currentIndex = world.camera_manager.index
-                    world.destroy_sensors()
-                    # disable autopilot
-                    self._autopilot_enabled = False
-                    world.player.set_autopilot(self._autopilot_enabled)
-                    world.hud.notification("Replaying file 'manual_recording.rec'")
-                    # replayer
-                    client.replay_file("manual_recording.rec", world.recording_start, 0, 0)
-                    world.camera_manager.set_sensor(currentIndex)
-                elif event.key == K_MINUS and (pygame.key.get_mods() & KMOD_CTRL):
-                    if pygame.key.get_mods() & KMOD_SHIFT:
-                        world.recording_start -= 10
-                    else:
-                        world.recording_start -= 1
-                    world.hud.notification("Recording start time is %d" % (world.recording_start))
-                elif event.key == K_EQUALS and (pygame.key.get_mods() & KMOD_CTRL):
-                    if pygame.key.get_mods() & KMOD_SHIFT:
-                        world.recording_start += 10
-                    else:
-                        world.recording_start += 1
-                    world.hud.notification("Recording start time is %d" % (world.recording_start))
-                if isinstance(self._control, carla.VehicleControl):
-                    if event.key == K_p and not (pygame.key.get_mods() & KMOD_CTRL):
-                        self._autopilot_enabled = not self._autopilot_enabled
-                        world.player.set_autopilot(self._autopilot_enabled)
-                        world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
+        # for event in pygame.event.get():
+        #     if event.type == pygame.QUIT:
+        #         return True
+        #     elif event.type == pygame.KEYUP:
+        #         if self._is_quit_shortcut(event.key):
+        #             return True
+        #         elif event.key == K_BACKSPACE:
+        #             world.restart()
+        #         elif event.key == K_F1:
+        #             world.hud.toggle_info()
+        #         elif event.key == K_h or (event.key == K_SLASH and pygame.key.get_mods() & KMOD_SHIFT):
+        #             world.hud.help.toggle()
+        #         elif event.key == K_TAB:
+        #             world.camera_manager.toggle_camera()
+        #         elif event.key == K_c and pygame.key.get_mods() & KMOD_SHIFT:
+        #             world.next_weather(reverse=True)
+        #         elif event.key == K_c:
+        #             world.next_weather()
+        #         elif event.key == K_BACKQUOTE:
+        #             world.camera_manager.next_sensor()
+        #         elif event.key > K_0 and event.key <= K_9:
+        #             world.camera_manager.set_sensor(event.key - 1 - K_0)
+        #         elif event.key == K_r and not (pygame.key.get_mods() & KMOD_CTRL):
+        #             world.camera_manager.toggle_recording()
+        #         elif event.key == K_r and (pygame.key.get_mods() & KMOD_CTRL):
+        #             if (world.recording_enabled):
+        #                 client.stop_recorder()
+        #                 world.recording_enabled = False
+        #                 world.hud.notification("Recorder is OFF")
+        #             else:
+        #                 client.start_recorder("manual_recording.rec")
+        #                 world.recording_enabled = True
+        #                 world.hud.notification("Recorder is ON")
+        #         elif event.key == K_p and (pygame.key.get_mods() & KMOD_CTRL):
+        #             # stop recorder
+        #             client.stop_recorder()
+        #             world.recording_enabled = False
+        #             # work around to fix camera at start of replaying
+        #             currentIndex = world.camera_manager.index
+        #             world.destroy_sensors()
+        #             # disable autopilot
+        #             self._autopilot_enabled = False
+        #             world.player.set_autopilot(self._autopilot_enabled)
+        #             world.hud.notification("Replaying file 'manual_recording.rec'")
+        #             # replayer
+        #             client.replay_file("manual_recording.rec", world.recording_start, 0, 0)
+        #             world.camera_manager.set_sensor(currentIndex)
+        #         elif event.key == K_MINUS and (pygame.key.get_mods() & KMOD_CTRL):
+        #             if pygame.key.get_mods() & KMOD_SHIFT:
+        #                 world.recording_start -= 10
+        #             else:
+        #                 world.recording_start -= 1
+        #             world.hud.notification("Recording start time is %d" % (world.recording_start))
+        #         elif event.key == K_EQUALS and (pygame.key.get_mods() & KMOD_CTRL):
+        #             if pygame.key.get_mods() & KMOD_SHIFT:
+        #                 world.recording_start += 10
+        #             else:
+        #                 world.recording_start += 1
+        #             world.hud.notification("Recording start time is %d" % (world.recording_start))
+        #         if isinstance(self._control, carla.VehicleControl):
+        #             if event.key == K_p and not (pygame.key.get_mods() & KMOD_CTRL):
+        #                 self._autopilot_enabled = not self._autopilot_enabled
+        #                 world.player.set_autopilot(self._autopilot_enabled)
+        #                 world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
         if not self._autopilot_enabled:
             # Control loop
             # get waypoints
@@ -391,16 +401,20 @@ class VehicleControl(object):
                     # print(f"number of waypoints : {len(next_waypoint_list)}")
                     # current_location = world.player.get_location()
                 elif world.control_mode == "MPC":
-                    dist = world.time_step * world.desired_speed
+                    dist = world.time_step * current_speed + 0.1
                     # current_location = world.player.get_location()
                     prev_waypoint = world.map.get_waypoint(current_location)
                     current_waypoint = prev_waypoint.next(dist)[0]
                     waypoints = []
+                    road_desired_speed = world.player.get_speed_limit()/3.6*0.95
                     for i in range(world.planning_horizon):
-                        # calculated_yaw = np.arctan2(current_waypoint.transform.location.y - prev_waypoint.transform.location.y,
-                        #                             current_waypoint.transform.location.x - prev_waypoint.transform.location.x)
-                        # print(f"calculated : yaw {calculated_yaw}, system yaw {wrap_angle(current_waypoint.transform.rotation.yaw)}")
-                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, world.desired_speed, wrap_angle(current_waypoint.transform.rotation.yaw)])
+                        if world.control_count + i <= 20:
+                            desired_speed = (world.control_count + i)/20.0 * road_desired_speed
+                        else:
+                            desired_speed = road_desired_speed
+                        
+                        # print(desired_speed)
+                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, desired_speed, wrap_angle(current_waypoint.transform.rotation.yaw)])
                         prev_waypoint = current_waypoint
                         current_waypoint = prev_waypoint.next(dist)[0]
                         # current_waypoint = current_waypoint.next(dist)[0]
@@ -408,6 +422,7 @@ class VehicleControl(object):
                 world.controller.update_controls()
                 self._control.throttle, self._control.steer, self._control.brake = world.controller.get_commands()
                 world.player.apply_control(self._control)
+                world.control_count += 1
             # world.player.set_transform(current_waypoint.transform)
 
     def _parse_vehicle_keys(self, keys, milliseconds):
@@ -869,7 +884,9 @@ def game_loop(args):
 
         clock = pygame.time.Clock()
         while True:
+            # clock.tick(5)
             clock.tick_busy_loop(args.FPS)
+            # pygame.time.dalay(500)
             if controller.parse_events(client, world, clock):
                 return
             world.tick(clock)
@@ -939,17 +956,23 @@ def main():
         '--map',
         metavar='NAME',
         default='Town04',
-        help='simulation map (default: "Town04")')
+        help='simulation map (default: "Town06")')
     argparser.add_argument(
         '--spawn_x',
         metavar='x',
-        default='15.4',
+        default='-320',
         help='x position to spawn the agent')
     argparser.add_argument(
         '--spawn_y',
         metavar='y',
-        default='0.0',
+        default='400',
         help='y position to spawn the agent')
+    argparser.add_argument(
+        '--random_spawn',        
+        metavar='RS',
+        default='0',
+        type=int,
+        help='Random spawn agent')
     argparser.add_argument(
         '--vehicle_id',
         metavar='NAME',
@@ -959,7 +982,7 @@ def main():
         '--vehicle_wheelbase',
         metavar='NAME',
         type=float,
-        default='2.88',
+        default='2.89',
         help='vehicle wheelbase used for model predict control')
     argparser.add_argument(
         '--waypoint_resolution',
@@ -988,7 +1011,7 @@ def main():
         '--planning_horizon',
         metavar='HORIZON',
         type=int,
-        default='5',
+        default='4',
         help='Planning horizon for MPC')
     argparser.add_argument(
         '--time_step',
@@ -999,7 +1022,7 @@ def main():
     argparser.add_argument(
         '--FPS',
         metavar='FPS',
-        default='5',
+        default='15',
         type=int,
         help='Frame per second for simulation')
 

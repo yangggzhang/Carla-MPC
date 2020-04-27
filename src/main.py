@@ -417,22 +417,20 @@ class VehicleControl(object):
                     # print(f"number of waypoints : {len(next_waypoint_list)}")
                     # current_location = world.player.get_location()
                 elif world.control_mode == "MPC":
-                    dist = world.time_step * current_speed + 0.1
-                    # current_location = world.player.get_location()
                     prev_waypoint = world.map.get_waypoint(current_location)
-                    current_waypoint = prev_waypoint.next(dist)[0]
                     waypoints = []
                     road_desired_speed = world.player.get_speed_limit()/3.6*0.95
                     for i in range(world.planning_horizon):
                         if world.control_count + i <= 20:
-                            desired_speed = (world.control_count + i)/20.0 * road_desired_speed
+                            desired_speed = (world.control_count + 1 + i)/20.0 * road_desired_speed
                         else:
                             desired_speed = road_desired_speed
-                        
+                        dist = world.time_step * desired_speed
+                        current_waypoint = prev_waypoint.next(dist)[0]
                         # print(desired_speed)
                         waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, desired_speed, wrap_angle(current_waypoint.transform.rotation.yaw)])
                         prev_waypoint = current_waypoint
-                        current_waypoint = prev_waypoint.next(dist)[0]
+                        # current_waypoint = prev_waypoint.next(dist)[0]
                         # current_waypoint = current_waypoint.next(dist)[0]
                 world.controller.update_waypoints(waypoints)     
                 world.controller.update_controls()

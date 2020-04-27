@@ -160,18 +160,22 @@ class World(object):
         self._actor_filter = args.filter
         self._gamma = args.gamma
         self.args = args
-        self.restart()
-        self.world.on_tick(hud.on_world_tick)
-        self.recording_enabled = False
         self.recording_start = 0
         self.waypoint_resolution = args.waypoint_resolution
         self.waypoint_lookahead_distance = args.waypoint_lookahead_distance
         self.desired_speed = args.desired_speed
-        if args.control_mode == "PID":
-            self.controller = PIDController.Controller()
-        elif args.control_mode == "MPC":
-            self.controller = MPCController.Controller()
-
+        self.planning_horizon = args.planning_horizon
+        self.time_step = args.time_step
+        self.control_mode = args.control_mode
+        self.controller = None
+        # if args.control_mode == "PID":
+        #     self.controller = PIDController.Controller()
+        # elif args.control_mode == "MPC":
+        #     self.controller = MPCController.Controller(wheelbase=args.vehicle_wheelbase, planning_horizon = args.planning_horizon, time_step = args.time_step)
+        self.restart()
+        self.world.on_tick(hud.on_world_tick)
+        self.recording_enabled = False
+        
     def restart(self):
         # Keep same camera config if the camera manager exists.
         cam_index = self.camera_manager.index if self.camera_manager is not None else 0
@@ -213,17 +217,17 @@ class World(object):
             spawn_point.location.z = 1.0
             spawn_point.rotation.yaw = float(self.args.spawn_yaw)
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
-            if self.args.control_mode == "PID":
+            if self.control_mode == "PID":
                 self.controller = PIDController.Controller()
-            elif self.args.control_mode == "MPC":
-                self.controller = MPCController.Controller()
+            elif self.control_mode == "MPC":
+                self.controller = MPCController.Controller(wheelbase=self.args.vehicle_wheelbase, planning_horizon = self.args.planning_horizon, time_step = self.args.time_step)
             velocity_vec = self.player.get_velocity()
             current_transform = self.player.get_transform()
             current_location = current_transform.location
             current_roration = current_transform.rotation
-            current_x = current_transform.location.x
-            current_y = current_transform.location.y
-            current_yaw = current_transform.rotation.yaw / 180.0 * np.pi
+            current_x = current_location.x
+            current_y = current_location.y
+            current_yaw = current_roration.yaw / 180.0 * np.pi
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
             frame, current_timestamp =self.hud.get_simulation_information()
             self.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
@@ -359,30 +363,38 @@ class VehicleControl(object):
             # Control loop
             # get waypoints
             current_location = world.player.get_location()
-            current_waypoint = world.map.get_waypoint(current_location)
-            next_waypoint = current_waypoint.next(1.0)
-            waypoints = []
-            for i in range(int(world.waypoint_lookahead_distance / world.waypoint_resolution)):
-                waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, world.desired_speed])
-                current_waypoint = current_waypoint.next(world.waypoint_resolution)[0]
-            # print(f"number of waypoints : {len(next_waypoint_list)}")
-            # current_location = world.player.get_location()
             velocity_vec = world.player.get_velocity()
             current_transform = world.player.get_transform()
             current_location = current_transform.location
-            current_roration = current_transform.rotation
-            current_x = current_transform.location.x
-            current_y = current_transform.location.y
-            current_yaw = current_transform.rotation.yaw / 180.0 * np.pi
+            current_rotation = current_transform.rotation
+            current_x = current_location.x
+            current_y = current_location.y
+            current_yaw = current_rotation.yaw / 180.0 * np.pi
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
             # print(f"Control input : speed : {current_speed}, current position : {current_x}, {current_y}, yaw : {current_yaw}")
             frame, current_timestamp =world.hud.get_simulation_information()
-            world.controller.update_waypoints(waypoints)
             ready_to_go = world.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
             if ready_to_go:
+                if world.control_mode == "PID":
+                    current_location = world.player.get_location()
+                    current_waypoint = world.map.get_waypoint(current_location).next(world.waypoint_resolution)[0]
+                    waypoints = []
+                    for i in range(int(world.waypoint_lookahead_distance / world.waypoint_resolution)):
+                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, world.desired_speed])
+                        current_waypoint = current_waypoint.next(world.waypoint_resolution)[0]
+                    # print(f"number of waypoints : {len(next_waypoint_list)}")
+                    # current_location = world.player.get_location()
+                elif world.control_mode == "MPC":
+                    dist = world.time_step * world.desired_speed
+                    # current_location = world.player.get_location()
+                    current_waypoint = world.map.get_waypoint(current_location).next(dist)[0]
+                    waypoints = []
+                    for i in range(world.planning_horizon):
+                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, world.desired_speed, current_waypoint.transform.rotation.yaw / 180 * np.pi])
+                        current_waypoint = current_waypoint.next(dist)[0]
+                world.controller.update_waypoints(waypoints)     
                 world.controller.update_controls()
                 self._control.throttle, self._control.steer, self._control.brake = world.controller.get_commands()
-                print(f"Control command - throttle : {self._control.throttle}, steer : {self._control.steer}, brake : {self._control.brake} ")
                 world.player.apply_control(self._control)
             # world.player.set_transform(current_waypoint.transform)
 
@@ -941,12 +953,12 @@ def main():
         '--vehicle_wheelbase',
         metavar='NAME',
         type=float,
-        default='2.89',
+        default='2.0',
         help='vehicle wheelbase used for model predict control')
     argparser.add_argument(
         '--waypoint_resolution',
         metavar='WR',
-        default='0.01',
+        default='0.5',
         type=float,
         help='waypoint resulution for control')
     argparser.add_argument(
@@ -958,20 +970,33 @@ def main():
     argparser.add_argument(
         '--desired_speed',
         metavar='SPEED',
-        default='30.0',
+        default='5',
         type=float,
         help='desired speed for highway driving')
     argparser.add_argument(
         '--control_mode',
-        metavar='CMODE',
-        default='PID',
-        help='Controller option (Default : PID)')
+        metavar='CONT',
+        default='MPC',
+        help='Controller')
+    argparser.add_argument(
+        '--planning_horizon',
+        metavar='HORIZON',
+        type=int,
+        default='20',
+        help='Planning horizon for MPC')
+    argparser.add_argument(
+        '--time_step',
+        metavar='DT',
+        default='0.1',
+        type=float,
+        help='Planning time step for MPC')
     argparser.add_argument(
         '--FPS',
         metavar='FPS',
-        default='10',
+        default='20',
         type=int,
         help='Frame per second for simulation')
+
     args = argparser.parse_args()
 
     args.width, args.height = [int(x) for x in args.res.split('x')]

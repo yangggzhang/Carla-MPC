@@ -3,7 +3,6 @@
 """
 2D Controller Class to be used for the CARLA waypoint follower demo.
 """
-import cutils
 import numpy as np
 from matplotlib import pyplot as plt
 from Controller.MPC import MPC
@@ -11,8 +10,7 @@ from Controller.LongitudinalPID import LongitudinalPID
 from Controller.MPCParams import MPCParams
 
 class Controller(object):
-    def __init__(self, waypoints, controller_type="MPC"):
-        self.vars = cutils.CUtils()
+    def __init__(self, waypoints = None, wheelbase = 2.89, planning_horizon = 10, time_step = 0.1):
         self._lookahead_distance = 3.0
         self._lookahead_time = 1.0
         self._current_x = 0
@@ -28,20 +26,9 @@ class Controller(object):
         self._set_steer = 0
         self._waypoints = waypoints
         self._conv_rad_to_steer = 180.0 / 70.0 / np.pi
-
-        self.longitudinal_controller = LongitudinalPID(self._current_speed,
-                                                       Kp=1.0,
-                                                       Kd=0.1,
-                                                       Ki=0.1,
-                                                       integrator_max=10.0,
-                                                       integrator_min=-10.0)
-        Q = np.eye(4)
-        R = 0.01*np.eye(2)
-        Qf = 5*np.eye(4)
-        Rd = np.eye(2)
         self.controller = MPC(  x = self._current_x, y = self._current_y, yaw = self._current_yaw, v = self._current_speed, delta = 0,
-                                L = MPCParams.L, Q = MPCParams.Q, R = MPCParams.R, Qf = MPCParams.Qf, Rd = MPCParams.Rd, len_horizon = MPCParams.len_horizon,
-                                steer_rate_max = MPCParams.steer_rate_max, a_max = MPCParams.a_max, a_min = MPCParams.a_min, a_rate_max = MPCParams.a_rate_max, v_min = MPCParams.v_min, v_max = MPCParams.v_max)
+                                L = wheelbase, Q = MPCParams.Q, R = MPCParams.R, Qf = MPCParams.Qf, Rd = MPCParams.Rd, len_horizon = planning_horizon,
+                                steer_rate_max = MPCParams.steer_rate_max, a_max = MPCParams.a_max, a_min = MPCParams.a_min, a_rate_max = MPCParams.a_rate_max, v_min = MPCParams.v_min, v_max = MPCParams.v_max, time_step=time_step)
 
     def update_values(self, x, y, yaw, speed, timestamp, frame):
         self._current_x = x
@@ -50,8 +37,12 @@ class Controller(object):
         self._current_speed = speed
         self._current_timestamp = timestamp
         self._current_frame = frame
+        self.controller.update_position(x, y)
+        self.controller.update_speed(speed)
+        self.controller.update_yaw(yaw)
         if self._current_frame:
             self._start_control_loop = True
+        return self._start_control_loop
 
     def get_lookahead_index(self, lookahead_distance):
         min_idx = 0
@@ -134,52 +125,14 @@ class Controller(object):
         y = self._current_y
         yaw = self._current_yaw
         v = self._current_speed
-        self.update_desired_speed()
-        v_desired = self._desired_speed
-        t = self._current_timestamp
-        waypoints = self._waypoints
         throttle_output = 0
         steer_output = 0
         brake_output = 0
 
-        self.vars.create_var('t_prev', 0.0)
-
         # Skip the first frame to store previous values properly
         if self._start_control_loop:
-
-            dt = t - self.vars.t_prev
-            throttle_output = self.longitudinal_controller.get_throttle_input(
-                v, dt, v_desired)
-
-            cyaw = [yaw]
-            cx = []
-            cy = []
-            speed_profile = []
-            for i in range(len(self._waypoints)-1):
-                cyaw.append(np.arctan2(self._waypoints[i+1][1] - self._waypoints[i][1],
-                                        self._waypoints[i+1][0] - self._waypoints[i][0]))
-                cx.append(self._waypoints[i][0])
-                cy.append(self._waypoints[i][1])
-                speed_profile.append(self._waypoints[i][2])
-
-            cyaw.append(cyaw[-1])
-            cx.append(self._waypoints[-1][0])
-            cy.append(self._waypoints[-1][1])
-            speed_profile.append(self._waypoints[-1][2])
-            ck = [0.0] * len(self._waypoints)
-
-            cyaw = self.smooth_yaw(cyaw)
-            del cyaw[0]
-
-            # plt.figure(0)
-            # plt.cla()
-            # plt.plot(cx, cy, '-c')
-
             acceleration, steer_output, xs, ys, vs, yaws = \
-                self.controller.get_inputs(x, y, yaw,
-                                            v, np.stack((cx, cy, cyaw, ck)),
-                                            speed_profile,
-                                            0.1)
+                self.controller.get_inputs(x, y, yaw, v, np.array(self._waypoints).T)
 
             ######################################################
             # SET CONTROLS OUTPUT
@@ -190,8 +143,7 @@ class Controller(object):
         else:
             throttle_output = 0.0
             brake_output = acceleration / MPCParams.a_min  
-        print(f"Control input , throttle : {throttle_output}, brake : {brake_output}, acceleration : {acceleration}")
+        print(f"Control input , throttle : {throttle_output}, steer outout : {steer_output}, brake : {brake_output}, acceleration : {acceleration}")
         self.set_throttle(throttle_output)  # in percent (0 to 1)
         self.set_steer(steer_output)        # in rad (-1.22 to 1.22)
         self.set_brake(brake_output)        # in percent (0 to 1)
-        self.vars.t_prev = t

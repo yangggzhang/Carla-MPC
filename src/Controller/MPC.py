@@ -10,7 +10,7 @@ class MPC:
     def __init__(self, x=0, y=0, yaw=0, v=0, delta=0,
                  max_steering_angle=1.22, L=3, Q=np.eye(4), Qf=np.eye(4),
                  R=np.eye(2), Rd=np.eye(2), len_horizon=5, a_max=2, a_min=-1,
-                 a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=80):
+                 a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=80, time_step = 0.1):
 
         # States
         self.x = x
@@ -30,6 +30,9 @@ class MPC:
         self.R = R
         self.Rd = Rd
         self.Qf = Qf
+
+        #forward time step
+        self.time_step = time_step
 
         self.len_horizon = len_horizon
 
@@ -96,7 +99,8 @@ class MPC:
 
         cost = 0
         constraints = [z[:, 0] == z_initial.flatten()]
-        for i in range(self.len_horizon):
+        print(z_ref.shape)
+        for i in range(self.len_horizon - 1):
             ## Cost
             if i != 0:
                 cost += cvxpy.quad_form(z_ref[:, i] - z[:, i], self.Q)
@@ -131,8 +135,8 @@ class MPC:
                 constraints += [u[1, i] - u[1, i-1] >= -self.steer_rate_max]
 
         # Terminal cost
-        cost += cvxpy.quad_form(z_ref[:, self.len_horizon] - \
-                                z[:, self.len_horizon], self.Qf)
+        cost += cvxpy.quad_form(z_ref[:, -1] - \
+                                z[:, -1], self.Qf)
 
         # Quadratic Program
         qp = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
@@ -187,35 +191,24 @@ class MPC:
 
         return idxs, x_ref
 
-    def get_inputs(self, x, y, yaw, v, waypoints, speed_profile, dt=0.01):
+    def get_inputs(self, x, y, yaw, v, waypoints):
         self.update_position(x, y)
         self.update_yaw(yaw)
         self.update_speed(v)
 
-        cx = waypoints[0]
-        cy = waypoints[1]
-        cyaw = waypoints[2]
-        ck = waypoints[3]
+        # cx = waypoints[0]
+        # cy = waypoints[1]
+        # cyaw = waypoints[2]
+        # ck = waypoints[3]
 
-        x0 = np.array([[self.x], [self.y], [self.v], [self.yaw]])
-        idx, x_ref = self.get_ref_traj(cx, cy, cyaw, ck, speed_profile,
-                                  self.prev_idx, dt=dt)
-        # plt.figure(0)
-        # plt.plot(x_ref[0, :], x_ref[1, :], 'xr')
+        x0 = np.array([[x], [y], [v], [yaw]])
 
-        self.prev_idx = idx[0]
+        print('-------------')
+        print(f"current position {self.x}, {self.y}, {self.yaw}")
+        print(f"reference : {waypoints[0,0]} , {waypoints[1,0]}, {waypoints[2,0]}, {waypoints[3,0]}" )
+        print(f"previous output : {self.prev_accelerations[0]}, {self.prev_deltas[0]}")
+
         xs, ys, vs, yaws, self.prev_accelerations, self.prev_deltas = \
-            self.linear_mpc(x_ref, x0, self.prev_deltas, dt=dt)
+            self.linear_mpc(waypoints, x0, self.prev_deltas, dt=self.time_step)
 
-        # plt.plot(xs, ys, '.b')
-        # plt.ylim([70, 150])
-        # plt.pause(0.01)
-
-        # print('---------')
-        # print(self.prev_accelerations)
-        # print(self.prev_deltas)
-        # print(xs)
-        # print(ys)
-        # print(vs)
-        # print(yaws)
         return self.prev_accelerations[0], self.prev_deltas[0], xs, ys, vs, yaws

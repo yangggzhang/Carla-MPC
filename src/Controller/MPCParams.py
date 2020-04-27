@@ -1,10 +1,6 @@
 import numpy as np
 
 class MPCParams:
-
-    # Wheel base
-    L = 3
-
     # State Cost
     Q = np.eye(4)
 
@@ -21,7 +17,7 @@ class MPCParams:
     len_horizon = 10
 
     # Constrains
-    max_steering_angle = 1.22
+    max_steering_angle = 1.0
 
     a_max = 2
 

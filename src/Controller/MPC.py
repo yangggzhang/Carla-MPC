@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 
 class MPC:
     def __init__(self, x=0, y=0, yaw=0, v=0, delta=0,
-                 max_steering_angle=1.22, L=3, Q=np.eye(4), Qf=np.eye(4),
+                 max_steering_angle=1.22, L=3, lf=1.5, lr=1.5, Q=np.eye(4), Qf=np.eye(4),
                  R=np.eye(2), Rd=np.eye(2), len_horizon=5, a_max=2, a_min=-1,
                  a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=80, dist = 1.5, time_step = 0.1):
 
@@ -24,6 +24,8 @@ class MPC:
 
         # Wheel base
         self.L = L
+        self.lf = lf
+        self.lr = lr
 
         # Control gain
         self.Q = Q
@@ -76,24 +78,38 @@ class MPC:
 
         return idx, cx[idx], cy[idx]
 
-    def get_linearized_dynamics(self, yaw, delta, v, dt=0.01):
-        A = np.eye(4)
-        A[0, 2] = np.cos(yaw) * dt
-        A[0, 3] = -v * np.sin(yaw) * dt
-        A[1, 2] = np.sin(yaw) * dt
-        A[1, 3] = v * np.cos(yaw) * dt
-        A[3, 2] = np.tan(delta) * dt / self.L
+    def get_linearized_dynamics(self, psi, delta, v, dt=0.01):
+        self.lr = 0.5 * self.L
+        A = np.array([
+                     [ 1, 0,                         np.cos(psi + np.arctan((self.lr*np.tan(delta))/(self.L))), -v*np.sin(psi + np.arctan((self.lr*np.tan(delta))/(self.L)))],
+                     [ 0, 1,                         np.sin(psi + np.arctan((self.lr*np.tan(delta))/(self.L))),  v*np.cos(psi + np.arctan((self.lr*np.tan(delta))/(self.L)))],
+                     [ 0, 0,                                                                  1,                                             0],
+                     [ 0, 0, np.tan(delta)/((self.L)*np.sqrt((self.lr**2*np.tan(delta)**2)/(self.L)**2 + 1)),                                             1]
+                     ])
 
-        B = np.zeros((4, 2))
-        B[2, 0] = dt
-        B[3, 1] = v * dt / (self.L * np.cos(delta)**2)
+        B = np.array([
+                     [ 0,                                                             -(self.lr*v*np.sin(psi + np.arctan((self.lr*np.tan(delta))/(self.L)))*(np.tan(delta)**2 + 1))/((self.L)*((self.lr**2*np.tan(delta)**2)/(self.L)**2 + 1))],
+                     [ 0,                                                              (self.lr*v*np.cos(psi + np.arctan((self.lr*np.tan(delta))/(self.L)))*(np.tan(delta)**2 + 1))/((self.L)*((self.lr**2*np.tan(delta)**2)/(self.L)**2 + 1))],
+                     [ 1,                                                                                                                                                                                   0],
+                     [ 0, (v*(np.tan(delta)**2 + 1))/((self.L)*np.sqrt((self.lr**2*np.tan(delta)**2)/(self.L)**2 + 1)) - (self.lr**2*v*np.tan(delta)**2*(np.tan(delta)**2 + 1))/((self.L)**3*np.sqrt((self.lr**2*np.tan(delta)**2)/(self.L)**2 + 1)**3)]
+                    ])
 
-        C = np.zeros((4, 1))
-        C[0, 0] = v * np.sin(yaw) * yaw * dt
-        C[1, 0] = - v * np.cos(yaw) * yaw * dt
-        C[3, 0] = - v * delta * dt / (self.L * np.cos(delta)**2)
+        A[0, 2] *= dt
+        A[0, 3] *= dt
+        A[1, 2] *= dt
+        A[1, 3] *= dt
+        A[3, 2] *= dt
 
-        return A, B, C
+        B[0, 1] *= dt
+        B[1, 1] *= dt
+        B[2, 0] *= dt
+        B[3, 1] *= dt
+        return A, B
+        # C = np.zeros((4, 1))
+        # C[0, 0] = v * np.sin(yaw) * yaw * dt
+        # C[1, 0] = - v * np.cos(yaw) * yaw * dt
+        # C[3, 0] = - v * delta * dt / (self.L * np.cos(delta)**2)
+        
 
     def linear_mpc(self, z_ref, z_initial, prev_deltas, dt):
         z = cvxpy.Variable((4, self.len_horizon + 1))
@@ -113,9 +129,9 @@ class MPC:
             cost += cvxpy.quad_form(u[:, i], self.R)
 
             ## Constraints
-            A, B, C = self.get_linearized_dynamics(z_ref[3, i], self.prev_deltas[np.min([ i + 1, len(self.prev_deltas) - 1])],
+            A, B = self.get_linearized_dynamics(z_ref[3, i], self.prev_deltas[np.min([ i + 1, len(self.prev_deltas) - 1])],
                                                    z_ref[2, i], dt)
-            constraints += [z[:, i+1] == A @ z[:, i] + B @ u[:, i] + C.flatten()]
+            constraints += [z[:, i+1] == A @ z[:, i] + B @ u[:, i]]
 
             # Velocity limits
             constraints += [z[2, i] <= self.v_max]
@@ -135,8 +151,8 @@ class MPC:
             if i != 0:
                 constraints += [u[0, i] - u[0, i-1] <= self.a_rate_max]
                 constraints += [u[0, i] - u[0, i-1] >= -self.a_rate_max]
-                constraints += [u[1, i] - u[1, i-1] <= self.steer_rate_max * dt]
-                constraints += [u[1, i] - u[1, i-1] >= -self.steer_rate_max * dt]
+                # constraints += [u[1, i] - u[1, i-1] <= self.steer_rate_max * dt]
+                # constraints += [u[1, i] - u[1, i-1] >= -self.steer_rate_max * dt]
 
         # Terminal cost
         cost += cvxpy.quad_form(z_ref[:, -1] - \
@@ -155,6 +171,7 @@ class MPC:
             delta = np.array(u.value[1, :]).flatten()
         else:
             # x, y, v, yaw, a, delta = None, None, None, None, None, None
+            print("No results")
             a, delta = None, None
 
         return a, delta

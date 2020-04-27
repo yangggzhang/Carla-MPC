@@ -145,7 +145,20 @@ def get_actor_display_name(actor, truncate=250):
     name = ' '.join(actor.type_id.replace('_', '.').title().split('.')[1:])
     return (name[:truncate - 1] + u'\u2026') if len(name) > truncate else name
 
-
+def get_vehicle_wheelbases(wheels, center_of_mass):
+    front_left_wheel = wheels[0]
+    front_right_wheel = wheels[1]
+    back_left_wheel = wheels[2]
+    back_right_wheel = wheels[3]
+    front_x = (front_left_wheel.position.x + front_right_wheel.position.x) / 2.0
+    front_y = (front_left_wheel.position.y + front_right_wheel.position.y) / 2.0
+    front_z = (front_left_wheel.position.z + front_right_wheel.position.z) / 2.0
+    back_x = (back_left_wheel.position.x + back_right_wheel.position.x) / 2.0
+    back_y = (back_left_wheel.position.y + back_right_wheel.position.y) / 2.0
+    back_z = (back_left_wheel.position.z + back_right_wheel.position.z) / 2.0
+    l = np.sqrt( (front_x - back_x)**2 + (front_y - back_y)**2 + (front_z - back_z)**2  ) / 100.0
+    return l / 2 - center_of_mass.x , l / 2 + center_of_mass.x, l
+    
 # ==============================================================================
 # -- World ---------------------------------------------------------------------
 # ==============================================================================
@@ -191,7 +204,7 @@ class World(object):
             # print(blueprint_candidates.id)
             if blueprint_candidates.id == self.args.vehicle_id:
                 blueprint = blueprint_candidates
-                break
+                # break
         if blueprint is None:
             blueprint = random.choice(self.world.get_blueprint_library().filter(self._actor_filter))
 
@@ -234,7 +247,10 @@ class World(object):
             if self.control_mode == "PID":
                 self.controller = PIDController.Controller()
             elif self.control_mode == "MPC":
-                self.controller = MPCController.Controller(wheelbase=self.args.vehicle_wheelbase, planning_horizon = self.args.planning_horizon, time_step = self.args.time_step)
+                physic_control = self.player.get_physics_control()
+                lf, lr, l = get_vehicle_wheelbases(physic_control.wheels, physic_control.center_of_mass )
+                # print(f"wheel base {lf}, {lr}, {l}")
+                self.controller = MPCController.Controller(wheelbase=l, lr=lr, lf=lf, planning_horizon = self.args.planning_horizon, time_step = self.args.time_step)
             velocity_vec = self.player.get_velocity()
             current_transform = self.player.get_transform()
             current_location = current_transform.location
@@ -245,8 +261,8 @@ class World(object):
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
             frame, current_timestamp =self.hud.get_simulation_information()
             self.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
-        physic_control = self.player.get_physics_control()
-        wheels = physic_control.wheels
+
+        print(f"wheel : {lf}, {lr}, {l}")
         # print("here!")
         # for wheel in wheels:
         #     print(f"wheel position : {wheel.position.x} , {wheel.position.y} , {wheel.position.z}")

@@ -25,6 +25,11 @@ class Controller(object):
         self._conv_rad_to_steer  = 180.0 / 70.0 / np.pi
         self._pi                 = np.pi
         self._2pi                = 2.0 * np.pi
+        self.v_previous = 0.0
+        self.t_previous = 0.0
+        self.throttle_previous = 0.0
+        self.int_val = 0.0
+        self.last_error = 0.0
 
     def update_values(self, x, y, yaw, speed, timestamp, frame):
         self._current_x         = x
@@ -33,9 +38,17 @@ class Controller(object):
         self._current_speed     = speed
         self._current_timestamp = timestamp
         self._current_frame     = frame
+        return_type = True
+        if not self._start_control_loop:
+            return_type = False
+            self.v_previous = speed
+            self.t_previous = timestamp
+            self.throttle_previous = 0.0
+            self.int_val = 0.0
+            self.last_error = speed - self._desired_speed
         if self._current_frame:
             self._start_control_loop = True
-        return self._start_control_loop
+        return return_type
 
     def update_desired_speed(self):
         min_idx       = 0
@@ -113,14 +126,7 @@ class Controller(object):
 
             Example: Accessing the value from 'v_previous' to be used
             throttle_output = 0.5 * self.vars.v_previous
-        """
-        self.vars.create_var('v_previous', 0.0)
-        self.vars.create_var('t_previous', 0.0)
-        self.vars.create_var('throttle_previous', 0.0)
-        self.vars.create_var('int_val', 0.0)
-        self.vars.create_var('last_error', 0.0)
-
-        
+        """     
         kp = 1
         ki = 1
         kd = 0.01
@@ -176,25 +182,28 @@ class Controller(object):
             brake_output    = 0
 
             # pid control
-            print(f"time : t : {t}, prev_t : {self.vars.t_previous}")
-            st = t - self.vars.t_previous
+            st = t - self.t_previous
 
             # error term
             delta_v = v_desired - v
 
             # I
-            integral = self.vars.int_val + delta_v * st
+            integral = self.int_val + delta_v * st
+            test = np.min([integral, 50.0])
+            integral = np.max([integral, -50.0])
 
             # D
-            derivate = (delta_v - self.vars.last_error) / st
+            derivate = (delta_v - self.last_error) / st
 
             rst = kp * delta_v + ki * integral + kd * derivate
+            # print(f"Throttle control : desired :{v_desired}, current : {v} dv : {delta_v}, integral : {integral}, derivetive : {derivate}")
+            # print(f"P control : {kp * delta_v}, D control : {kd * derivate}, I control : {ki * integral}")
 
             if rst > 0:
                 throttle_output = np.tanh(rst)
                 throttle_output = max(0.0, min(1.0, throttle_output))
-                if throttle_output - self.vars.throttle_previous > 0.1:
-                    throttle_output = self.vars.throttle_previous + 0.1
+                if throttle_output - self.throttle_previous > 0.1:
+                    throttle_output = self.throttle_previous + 0.1
             else:
                 throttle_output = 0
 
@@ -243,8 +252,6 @@ class Controller(object):
 
             yaw_diff_crosstrack = np.arctan(k_e * crosstrack_error / (k_v + v))
             
-            print(f"steer controller : {yaw_diff} ,{crosstrack_error}")
-
             # 3. control low
             steer_expect = yaw_diff + yaw_diff_crosstrack
             if steer_expect > np.pi:
@@ -276,7 +283,8 @@ class Controller(object):
             current x, y, and yaw values here using persistent variables for use
             in the next iteration)
         """
-        self.vars.v_previous = v  # Store forward speed to be used in next step
-        self.vars.t_previous = t
-        self.vars.int_val = integral
-        self.vars.throttle_previous = throttle_output
+        self.v_previous = v  # Store forward speed to be used in next step
+        self.t_previous = t
+        self.int_val = integral
+        self.throttle_previous = throttle_output
+        self.last_error = delta_v

@@ -180,6 +180,7 @@ class World(object):
         blueprints = self.world.get_blueprint_library().filter(self._actor_filter)
         blueprint = None
         for blueprint_candidates in blueprints:
+            # print(blueprint_candidates.id)
             if blueprint_candidates.id == self.args.vehicle_id:
                 blueprint = blueprint_candidates
                 break
@@ -374,7 +375,7 @@ class VehicleControl(object):
             current_y = current_transform.location.y
             current_yaw = current_transform.rotation.yaw / 180.0 * np.pi
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
-            print(f"Control input : speed : {current_speed}, current position : {current_x}, {current_y}, yaw : {current_yaw}")
+            # print(f"Control input : speed : {current_speed}, current position : {current_x}, {current_y}, yaw : {current_yaw}")
             frame, current_timestamp =world.hud.get_simulation_information()
             world.controller.update_waypoints(waypoints)
             ready_to_go = world.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
@@ -934,8 +935,14 @@ def main():
     argparser.add_argument(
         '--vehicle_id',
         metavar='NAME',
-        default='vehicle.audi.etron',
+        default='vehicle.ford.mustang',
         help='vehicle to spawn')
+    argparser.add_argument(
+        '--vehicle_wheelbase',
+        metavar='NAME',
+        type=float,
+        default='2.89',
+        help='vehicle wheelbase used for model predict control')
     argparser.add_argument(
         '--waypoint_resolution',
         metavar='WR',

@@ -126,6 +126,13 @@ import Controller.MPCController as MPCController
 # -- Global functions ----------------------------------------------------------
 # ==============================================================================
 
+def wrap_angle(angle_in_degree):
+    angle_in_rad = angle_in_degree / 180.0 * np.pi
+    while (angle_in_rad > np.pi):
+        angle_in_rad -= 2 * np.pi
+    while (angle_in_rad < -np.pi):
+        angle_in_rad += 2 * np.pi
+    return angle_in_rad
 
 def find_weather_presets():
     rgx = re.compile('.+?(?:(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|$)')
@@ -168,10 +175,6 @@ class World(object):
         self.time_step = args.time_step
         self.control_mode = args.control_mode
         self.controller = None
-        # if args.control_mode == "PID":
-        #     self.controller = PIDController.Controller()
-        # elif args.control_mode == "MPC":
-        #     self.controller = MPCController.Controller(wheelbase=args.vehicle_wheelbase, planning_horizon = args.planning_horizon, time_step = args.time_step)
         self.restart()
         self.world.on_tick(hud.on_world_tick)
         self.recording_enabled = False
@@ -211,12 +214,13 @@ class World(object):
         while self.player is None:
             # spawn_points = self.map.get_spawn_points()
             # spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
-            spawn_point = carla.Transform()
-            spawn_point.location.x = float(self.args.spawn_x)
-            spawn_point.location.y = float(self.args.spawn_y)
-            spawn_point.location.z = 1.0
-            spawn_point.rotation.yaw = float(self.args.spawn_yaw)
-            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
+            spawn_location = carla.Location()
+            spawn_location.x = float(self.args.spawn_x)
+            spawn_location.y = float(self.args.spawn_y)
+            spawn_waypoint = self.map.get_waypoint(spawn_location)
+            spawn_transform = spawn_waypoint.transform
+            spawn_transform.location.z = 1.0
+            self.player = self.world.try_spawn_actor(blueprint, spawn_transform)
             if self.control_mode == "PID":
                 self.controller = PIDController.Controller()
             elif self.control_mode == "MPC":
@@ -227,11 +231,15 @@ class World(object):
             current_roration = current_transform.rotation
             current_x = current_location.x
             current_y = current_location.y
-            current_yaw = current_roration.yaw / 180.0 * np.pi
+            current_yaw = wrap_angle(current_roration.yaw)
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
             frame, current_timestamp =self.hud.get_simulation_information()
             self.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
-
+        physic_control = self.player.get_physics_control()
+        wheels = physic_control.wheels
+        # print("here!")
+        # for wheel in wheels:
+        #     print(f"wheel position : {wheel.position.x} , {wheel.position.y} , {wheel.position.z}")
         # Set up the sensors.
         self.collision_sensor = CollisionSensor(self.player, self.hud)
         self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
@@ -357,8 +365,6 @@ class VehicleControl(object):
                         self._autopilot_enabled = not self._autopilot_enabled
                         world.player.set_autopilot(self._autopilot_enabled)
                         world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
-                    else:
-                        print("hahahha")
         if not self._autopilot_enabled:
             # Control loop
             # get waypoints
@@ -369,7 +375,7 @@ class VehicleControl(object):
             current_rotation = current_transform.rotation
             current_x = current_location.x
             current_y = current_location.y
-            current_yaw = current_rotation.yaw / 180.0 * np.pi
+            current_yaw = wrap_angle(current_rotation.yaw)
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
             # print(f"Control input : speed : {current_speed}, current position : {current_x}, {current_y}, yaw : {current_yaw}")
             frame, current_timestamp =world.hud.get_simulation_information()
@@ -387,11 +393,17 @@ class VehicleControl(object):
                 elif world.control_mode == "MPC":
                     dist = world.time_step * world.desired_speed
                     # current_location = world.player.get_location()
-                    current_waypoint = world.map.get_waypoint(current_location).next(dist)[0]
+                    prev_waypoint = world.map.get_waypoint(current_location)
+                    current_waypoint = prev_waypoint.next(dist)[0]
                     waypoints = []
                     for i in range(world.planning_horizon):
-                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, world.desired_speed, current_waypoint.transform.rotation.yaw / 180 * np.pi])
-                        current_waypoint = current_waypoint.next(dist)[0]
+                        # calculated_yaw = np.arctan2(current_waypoint.transform.location.y - prev_waypoint.transform.location.y,
+                        #                             current_waypoint.transform.location.x - prev_waypoint.transform.location.x)
+                        # print(f"calculated : yaw {calculated_yaw}, system yaw {wrap_angle(current_waypoint.transform.rotation.yaw)}")
+                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, world.desired_speed, wrap_angle(current_waypoint.transform.rotation.yaw)])
+                        prev_waypoint = current_waypoint
+                        current_waypoint = prev_waypoint.next(dist)[0]
+                        # current_waypoint = current_waypoint.next(dist)[0]
                 world.controller.update_waypoints(waypoints)     
                 world.controller.update_controls()
                 self._control.throttle, self._control.steer, self._control.brake = world.controller.get_commands()
@@ -931,19 +943,13 @@ def main():
     argparser.add_argument(
         '--spawn_x',
         metavar='x',
-        default='4.9',
+        default='15.4',
         help='x position to spawn the agent')
     argparser.add_argument(
         '--spawn_y',
         metavar='y',
         default='0.0',
         help='y position to spawn the agent')
-    argparser.add_argument(
-        '--spawn_yaw',
-        metavar='Y',
-        default='-90.0',
-        type=float,
-        help='Yaw position to spawn the agent')
     argparser.add_argument(
         '--vehicle_id',
         metavar='NAME',
@@ -953,7 +959,7 @@ def main():
         '--vehicle_wheelbase',
         metavar='NAME',
         type=float,
-        default='2.0',
+        default='2.88',
         help='vehicle wheelbase used for model predict control')
     argparser.add_argument(
         '--waypoint_resolution',
@@ -970,7 +976,7 @@ def main():
     argparser.add_argument(
         '--desired_speed',
         metavar='SPEED',
-        default='5',
+        default='3',
         type=float,
         help='desired speed for highway driving')
     argparser.add_argument(
@@ -982,18 +988,18 @@ def main():
         '--planning_horizon',
         metavar='HORIZON',
         type=int,
-        default='20',
+        default='5',
         help='Planning horizon for MPC')
     argparser.add_argument(
         '--time_step',
         metavar='DT',
-        default='0.1',
+        default='0.4',
         type=float,
         help='Planning time step for MPC')
     argparser.add_argument(
         '--FPS',
         metavar='FPS',
-        default='20',
+        default='5',
         type=int,
         help='Frame per second for simulation')
 

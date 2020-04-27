@@ -99,7 +99,6 @@ class MPC:
 
         cost = 0
         constraints = [z[:, 0] == z_initial.flatten()]
-        print(z_ref.shape)
         for i in range(self.len_horizon - 1):
             ## Cost
             if i != 0:
@@ -112,8 +111,7 @@ class MPC:
             cost += cvxpy.quad_form(u[:, i], self.R)
 
             ## Constraints
-            # Dynamics
-            A, B, C = self.get_linearized_dynamics(z_ref[3, i], 0,
+            A, B, C = self.get_linearized_dynamics(z_ref[3, i], self.prev_deltas[0],
                                                    z_ref[2, i], dt)
             constraints += [z[:, i+1] == A @ z[:, i] + B @ u[:, i] + C.flatten()]
 
@@ -131,8 +129,8 @@ class MPC:
             if i != 0:
                 constraints += [u[0, i] - u[0, i-1] <= self.a_rate_max]
                 constraints += [u[0, i] - u[0, i-1] >= -self.a_rate_max]
-                constraints += [u[1, i] - u[1, i-1] <= self.steer_rate_max]
-                constraints += [u[1, i] - u[1, i-1] >= -self.steer_rate_max]
+                constraints += [u[1, i] - u[1, i-1] <= self.steer_rate_max * dt]
+                constraints += [u[1, i] - u[1, i-1] >= -self.steer_rate_max * dt]
 
         # Terminal cost
         cost += cvxpy.quad_form(z_ref[:, -1] - \
@@ -196,17 +194,7 @@ class MPC:
         self.update_yaw(yaw)
         self.update_speed(v)
 
-        # cx = waypoints[0]
-        # cy = waypoints[1]
-        # cyaw = waypoints[2]
-        # ck = waypoints[3]
-
         x0 = np.array([[x], [y], [v], [yaw]])
-
-        print('-------------')
-        print(f"current position {self.x}, {self.y}, {self.yaw}")
-        print(f"reference : {waypoints[0,0]} , {waypoints[1,0]}, {waypoints[2,0]}, {waypoints[3,0]}" )
-        print(f"previous output : {self.prev_accelerations[0]}, {self.prev_deltas[0]}")
 
         xs, ys, vs, yaws, self.prev_accelerations, self.prev_deltas = \
             self.linear_mpc(waypoints, x0, self.prev_deltas, dt=self.time_step)

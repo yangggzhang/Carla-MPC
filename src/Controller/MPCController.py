@@ -28,7 +28,7 @@ class Controller(object):
         self._conv_rad_to_steer = 180.0 / 70.0 / np.pi
         self.controller = MPC(  x = self._current_x, y = self._current_y, yaw = self._current_yaw, v = self._current_speed, delta = 0,
                                 L = wheelbase, Q = MPCParams.Q, R = MPCParams.R, Qf = MPCParams.Qf, Rd = MPCParams.Rd, len_horizon = planning_horizon,
-                                steer_rate_max = MPCParams.steer_rate_max, a_max = MPCParams.a_max, a_min = MPCParams.a_min, a_rate_max = MPCParams.a_rate_max, v_min = MPCParams.v_min, v_max = MPCParams.v_max, time_step=time_step)
+                                max_steering_angle = MPCParams.max_steering_angle, steer_rate_max = MPCParams.steer_rate_max, a_max = MPCParams.a_max, a_min = MPCParams.a_min, a_rate_max = MPCParams.a_rate_max, v_min = MPCParams.v_min, v_max = MPCParams.v_max, time_step=time_step)
 
     def update_values(self, x, y, yaw, speed, timestamp, frame):
         self._current_x = x

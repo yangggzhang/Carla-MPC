@@ -17,7 +17,7 @@ class MPCParams:
     # Control Cost 1) acceleration 2) steer rate
     R = np.eye(2)
 
-    dist = 1.5
+    dist = 3.0
 
     # State change cost
     Rd = np.eye(2)

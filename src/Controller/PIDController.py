@@ -248,7 +248,7 @@ class Controller(object):
                 crosstrack_error = abs(crosstrack_error)
             else:
                 crosstrack_error = - abs(crosstrack_error)
-            print()
+            # print()
 
             yaw_diff_crosstrack = np.arctan(k_e * crosstrack_error / (k_v + v))
             

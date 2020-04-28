@@ -52,6 +52,7 @@ from __future__ import print_function
 import glob
 import os
 import sys
+import pickle
 
 try:
     sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
@@ -145,7 +146,19 @@ def get_actor_display_name(actor, truncate=250):
     name = ' '.join(actor.type_id.replace('_', '.').title().split('.')[1:])
     return (name[:truncate - 1] + u'\u2026') if len(name) > truncate else name
 
-
+def get_vehicle_wheelbases(wheels, center_of_mass):
+    front_left_wheel = wheels[0]
+    front_right_wheel = wheels[1]
+    back_left_wheel = wheels[2]
+    back_right_wheel = wheels[3]
+    front_x = (front_left_wheel.position.x + front_right_wheel.position.x) / 2.0
+    front_y = (front_left_wheel.position.y + front_right_wheel.position.y) / 2.0
+    front_z = (front_left_wheel.position.z + front_right_wheel.position.z) / 2.0
+    back_x = (back_left_wheel.position.x + back_right_wheel.position.x) / 2.0
+    back_y = (back_left_wheel.position.y + back_right_wheel.position.y) / 2.0
+    back_z = (back_left_wheel.position.z + back_right_wheel.position.z) / 2.0
+    l = np.sqrt( (front_x - back_x)**2 + (front_y - back_y)**2 + (front_z - back_z)**2  ) / 100.0
+    return l / 2 - center_of_mass.x , l / 2 + center_of_mass.x, l
 # ==============================================================================
 # -- World ---------------------------------------------------------------------
 # ==============================================================================
@@ -234,7 +247,9 @@ class World(object):
             if self.control_mode == "PID":
                 self.controller = PIDController.Controller()
             elif self.control_mode == "MPC":
-                self.controller = MPCController.Controller(wheelbase=self.args.vehicle_wheelbase, planning_horizon = self.args.planning_horizon, time_step = self.args.time_step)
+                physic_control = self.player.get_physics_control()
+                _, _, l = get_vehicle_wheelbases(physic_control.wheels, physic_control.center_of_mass )
+                self.controller = MPCController.Controller(wheelbase=l, planning_horizon = self.args.planning_horizon, time_step = self.args.time_step)
             velocity_vec = self.player.get_velocity()
             current_transform = self.player.get_transform()
             current_location = current_transform.location
@@ -245,12 +260,6 @@ class World(object):
             current_speed = math.sqrt(velocity_vec.x**2 + velocity_vec.y**2 + velocity_vec.z**2)
             frame, current_timestamp =self.hud.get_simulation_information()
             self.controller.update_values(current_x, current_y, current_yaw, current_speed, current_timestamp, frame)
-        physic_control = self.player.get_physics_control()
-        wheels = physic_control.wheels
-        # print("here!")
-        # for wheel in wheels:
-        #     print(f"wheel position : {wheel.position.x} , {wheel.position.y} , {wheel.position.z}")
-        # Set up the sensors.
         self.collision_sensor = CollisionSensor(self.player, self.hud)
         self.lane_invasion_sensor = LaneInvasionSensor(self.player, self.hud)
         self.gnss_sensor = GnssSensor(self.player)
@@ -311,70 +320,6 @@ class VehicleControl(object):
         world.hud.notification("Press 'H' or '?' for help.", seconds=4.0)
 
     def parse_events(self, client, world, clock):
-        # for event in pygame.event.get():
-        #     if event.type == pygame.QUIT:
-        #         return True
-        #     elif event.type == pygame.KEYUP:
-        #         if self._is_quit_shortcut(event.key):
-        #             return True
-        #         elif event.key == K_BACKSPACE:
-        #             world.restart()
-        #         elif event.key == K_F1:
-        #             world.hud.toggle_info()
-        #         elif event.key == K_h or (event.key == K_SLASH and pygame.key.get_mods() & KMOD_SHIFT):
-        #             world.hud.help.toggle()
-        #         elif event.key == K_TAB:
-        #             world.camera_manager.toggle_camera()
-        #         elif event.key == K_c and pygame.key.get_mods() & KMOD_SHIFT:
-        #             world.next_weather(reverse=True)
-        #         elif event.key == K_c:
-        #             world.next_weather()
-        #         elif event.key == K_BACKQUOTE:
-        #             world.camera_manager.next_sensor()
-        #         elif event.key > K_0 and event.key <= K_9:
-        #             world.camera_manager.set_sensor(event.key - 1 - K_0)
-        #         elif event.key == K_r and not (pygame.key.get_mods() & KMOD_CTRL):
-        #             world.camera_manager.toggle_recording()
-        #         elif event.key == K_r and (pygame.key.get_mods() & KMOD_CTRL):
-        #             if (world.recording_enabled):
-        #                 client.stop_recorder()
-        #                 world.recording_enabled = False
-        #                 world.hud.notification("Recorder is OFF")
-        #             else:
-        #                 client.start_recorder("manual_recording.rec")
-        #                 world.recording_enabled = True
-        #                 world.hud.notification("Recorder is ON")
-        #         elif event.key == K_p and (pygame.key.get_mods() & KMOD_CTRL):
-        #             # stop recorder
-        #             client.stop_recorder()
-        #             world.recording_enabled = False
-        #             # work around to fix camera at start of replaying
-        #             currentIndex = world.camera_manager.index
-        #             world.destroy_sensors()
-        #             # disable autopilot
-        #             self._autopilot_enabled = False
-        #             world.player.set_autopilot(self._autopilot_enabled)
-        #             world.hud.notification("Replaying file 'manual_recording.rec'")
-        #             # replayer
-        #             client.replay_file("manual_recording.rec", world.recording_start, 0, 0)
-        #             world.camera_manager.set_sensor(currentIndex)
-        #         elif event.key == K_MINUS and (pygame.key.get_mods() & KMOD_CTRL):
-        #             if pygame.key.get_mods() & KMOD_SHIFT:
-        #                 world.recording_start -= 10
-        #             else:
-        #                 world.recording_start -= 1
-        #             world.hud.notification("Recording start time is %d" % (world.recording_start))
-        #         elif event.key == K_EQUALS and (pygame.key.get_mods() & KMOD_CTRL):
-        #             if pygame.key.get_mods() & KMOD_SHIFT:
-        #                 world.recording_start += 10
-        #             else:
-        #                 world.recording_start += 1
-        #             world.hud.notification("Recording start time is %d" % (world.recording_start))
-        #         if isinstance(self._control, carla.VehicleControl):
-        #             if event.key == K_p and not (pygame.key.get_mods() & KMOD_CTRL):
-        #                 self._autopilot_enabled = not self._autopilot_enabled
-        #                 world.player.set_autopilot(self._autopilot_enabled)
-        #                 world.hud.notification('Autopilot %s' % ('On' if self._autopilot_enabled else 'Off'))
         if not self._autopilot_enabled:
             # Control loop
             # get waypoints
@@ -402,22 +347,20 @@ class VehicleControl(object):
                     # current_location = world.player.get_location()
                 elif world.control_mode == "MPC":
                     dist = world.time_step * current_speed + 0.1
-                    # current_location = world.player.get_location()
                     prev_waypoint = world.map.get_waypoint(current_location)
                     current_waypoint = prev_waypoint.next(dist)[0]
                     waypoints = []
-                    road_desired_speed = world.player.get_speed_limit()/3.6*0.95
+                    road_desired_speed = world.desired_speed
+                    # road_desired_speed = world.player.get_speed_limit()/3.6*0.95
                     for i in range(world.planning_horizon):
-                        if world.control_count + i <= 20:
-                            desired_speed = (world.control_count + i)/20.0 * road_desired_speed
+                        if world.control_count + i <= 100:
+                            desired_speed = (world.control_count + 1 + i)/100.0 * road_desired_speed
                         else:
                             desired_speed = road_desired_speed
-                        
-                        # print(desired_speed)
-                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, desired_speed, wrap_angle(current_waypoint.transform.rotation.yaw)])
-                        prev_waypoint = current_waypoint
+                        dist = world.time_step * road_desired_speed
                         current_waypoint = prev_waypoint.next(dist)[0]
-                        # current_waypoint = current_waypoint.next(dist)[0]
+                        waypoints.append([current_waypoint.transform.location.x, current_waypoint.transform.location.y, road_desired_speed, wrap_angle(current_waypoint.transform.rotation.yaw)])
+                        prev_waypoint = current_waypoint
                 world.controller.update_waypoints(waypoints)     
                 world.controller.update_controls()
                 self._control.throttle, self._control.steer, self._control.brake = world.controller.get_commands()
@@ -482,6 +425,10 @@ class HUD(object):
         self._show_info = True
         self._info_text = []
         self._server_clock = pygame.time.Clock()
+        self.record = dict()
+        self.record["yaw"] = []
+        self.record["speed"] = []
+        self.record["time"] = []
 
     def on_world_tick(self, timestamp):
         self._server_clock.tick()
@@ -508,6 +455,13 @@ class HUD(object):
         max_col = max(1.0, max(collision))
         collision = [x / max_col for x in collision]
         vehicles = world.world.get_actors().filter('vehicle.*')
+        self.record["speed"].append(math.sqrt(v.x**2 + v.y**2 + v.z**2))
+        self.record["yaw"].append(t.rotation.yaw)
+        self.record["time"].append(self.simulation_time)
+        # print(self.simulation_time)
+        pickle.dump(self.record, open( "MPC_record.pkl", "wb" ) )
+
+
         self._info_text = [
             'Server:  % 16.0f FPS' % self.server_fps,
             'Client:  % 16.0f FPS' % clock.get_fps(),
@@ -871,7 +825,7 @@ def game_loop(args):
 
     try:
         client = carla.Client(args.host, args.port)
-        client.set_timeout(2.0)
+        client.set_timeout(10.0)
 
         display = pygame.display.set_mode(
             (args.width, args.height),
@@ -960,12 +914,12 @@ def main():
     argparser.add_argument(
         '--spawn_x',
         metavar='x',
-        default='-320',
+        default='-510',
         help='x position to spawn the agent')
     argparser.add_argument(
         '--spawn_y',
         metavar='y',
-        default='400',
+        default='200',
         help='y position to spawn the agent')
     argparser.add_argument(
         '--random_spawn',        
@@ -993,13 +947,13 @@ def main():
     argparser.add_argument(
         '--waypoint_lookahead_distance',
         metavar='WLD',
-        default='20.0',
+        default='5.0',
         type=float,
         help='waypoint look ahead distance for control')
     argparser.add_argument(
         '--desired_speed',
         metavar='SPEED',
-        default='3',
+        default='15',
         type=float,
         help='desired speed for highway driving')
     argparser.add_argument(
@@ -1016,7 +970,7 @@ def main():
     argparser.add_argument(
         '--time_step',
         metavar='DT',
-        default='0.4',
+        default='0.3',
         type=float,
         help='Planning time step for MPC')
     argparser.add_argument(

@@ -126,17 +126,16 @@ class MPC:
             constraints += [u[0, i] <= self.a_max]
             constraints += [u[1, i] <= self.max_steering_angle]
             constraints += [u[1, i] >= -self.max_steering_angle]
-            constraints += [(z[0, i] - z_ref[0, i])*np.sin(z_ref[3,i]) <= self.dist]
-            constraints += [(z[0, i] - z_ref[0, i])*np.sin(z_ref[3,i]) >= -self.dist]
-            constraints += [(z[1, i] - z_ref[1, i])*np.cos(z_ref[3,i]) <= self.dist]
-            constraints += [(z[1, i] - z_ref[1, i])*np.cos(z_ref[3,i]) >= -self.dist]
-
             # Rate of change of input limit
             if i != 0:
                 constraints += [u[0, i] - u[0, i-1] <= self.a_rate_max]
                 constraints += [u[0, i] - u[0, i-1] >= -self.a_rate_max]
                 constraints += [u[1, i] - u[1, i-1] <= self.steer_rate_max * dt]
                 constraints += [u[1, i] - u[1, i-1] >= -self.steer_rate_max * dt]
+                constraints += [(z[0, i + 1] - z_ref[0, i])*np.sin(z_ref[3,i]) <= self.dist]
+                constraints += [(z[0, i + 1] - z_ref[0, i])*np.sin(z_ref[3,i]) >= -self.dist]
+                constraints += [(z[1, i + 1] - z_ref[1, i])*np.cos(z_ref[3,i]) <= self.dist]
+                constraints += [(z[1, i + 1] - z_ref[1, i])*np.cos(z_ref[3,i]) >= -self.dist]
 
         # Terminal cost
         cost += cvxpy.quad_form(z_ref[:, -1] - \

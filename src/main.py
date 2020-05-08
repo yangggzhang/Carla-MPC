@@ -158,7 +158,10 @@ def get_vehicle_wheelbases(wheels, center_of_mass):
     back_y = (back_left_wheel.position.y + back_right_wheel.position.y) / 2.0
     back_z = (back_left_wheel.position.z + back_right_wheel.position.z) / 2.0
     l = np.sqrt( (front_x - back_x)**2 + (front_y - back_y)**2 + (front_z - back_z)**2  ) / 100.0
-    return l / 2 - center_of_mass.x , l / 2 + center_of_mass.x, l
+    # print(f"center of mass : {center_of_mass.x}, {center_of_mass.y}, {center_of_mass.z} wheelbase {l}")
+    # return center_of_mass.x , l - center_of_mass.x, l
+    return l - center_of_mass.x, center_of_mass.x, l
+
 # ==============================================================================
 # -- World ---------------------------------------------------------------------
 # ==============================================================================
@@ -248,8 +251,8 @@ class World(object):
                 self.controller = PIDController.Controller()
             elif self.control_mode == "MPC":
                 physic_control = self.player.get_physics_control()
-                _, _, l = get_vehicle_wheelbases(physic_control.wheels, physic_control.center_of_mass )
-                self.controller = MPCController.Controller(wheelbase=l, planning_horizon = self.args.planning_horizon, time_step = self.args.time_step)
+                lf, lr, l = get_vehicle_wheelbases(physic_control.wheels, physic_control.center_of_mass )
+                self.controller = MPCController.Controller(lf = lf, lr = lr, wheelbase=l, planning_horizon = self.args.planning_horizon, time_step = self.args.time_step)
             velocity_vec = self.player.get_velocity()
             current_transform = self.player.get_transform()
             current_location = current_transform.location
@@ -930,8 +933,9 @@ def main():
     argparser.add_argument(
         '--vehicle_id',
         metavar='NAME',
+        # default='vehicle.jeep.wrangler_rubicon',
         default='vehicle.ford.mustang',
-        help='vehicle to spawn')
+        help='vehicle to spawn, available options : vehicle.audi.a2 vehicle.audi.tt vehicle.carlamotors.carlacola vehicle.citroen.c3 vehicle.dodge_charger.police vehicle.jeep.wrangler_rubicon vehicle.yamaha.yzf vehicle.nissan.patrol vehicle.gazelle.omafiets vehicle.bh.crossbike vehicle.ford.mustang vehicle.bmw.isetta vehicle.audi.etron vehicle.harley-davidson.low rider vehicle.mercedes-benz.coupe vehicle.bmw.grandtourer vehicle.toyota.prius vehicle.diamondback.century vehicle.tesla.model3 vehicle.seat.leon vehicle.lincoln.mkz2017 vehicle.kawasaki.ninja vehicle.volkswagen.t2 vehicle.nissan.micra vehicle.chevrolet.impala vehicle.mini.cooperst')
     argparser.add_argument(
         '--vehicle_wheelbase',
         metavar='NAME',
@@ -953,7 +957,7 @@ def main():
     argparser.add_argument(
         '--desired_speed',
         metavar='SPEED',
-        default='15',
+        default='25',
         type=float,
         help='desired speed for highway driving')
     argparser.add_argument(
@@ -976,7 +980,7 @@ def main():
     argparser.add_argument(
         '--FPS',
         metavar='FPS',
-        default='15',
+        default='10',
         type=int,
         help='Frame per second for simulation')
 

@@ -3,10 +3,10 @@ import numpy as np
 class MPCParams:
     # State Cost
     # Q = np.eye(4)
-    Q = np.array([[  1.2,  0,  0,  0],
-                  [  0,  1.2,  0,  0],
+    Q = np.array([[  1.5,  0,  0,  0],
+                  [  0,  1.5,  0,  0],
                   [  0,  0,  1.0,  0],
-                  [  0,  0,  0,  1.0]])
+                  [  0,  0,  0,  1.2]])
 
     # Terminal Cost
     Qf = np.array([[  1.5,  0,  0,  0],
@@ -17,10 +17,11 @@ class MPCParams:
     # Control Cost 1) acceleration 2) steer rate
     R = np.eye(2)
 
-    dist = 3.0
+    dist = 3.5
 
     # State change cost
-    Rd = np.eye(2)
+    Rd = np.array([[1, 0],
+                   [0 ,1]])
 
     # Horizon
     len_horizon = 10

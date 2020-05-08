@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
 from numpy import linalg
+import math
 
 import cvxpy
 
@@ -8,7 +9,7 @@ from matplotlib import pyplot as plt
 
 class MPC:
     def __init__(self, x=0, y=0, yaw=0, v=0, delta=0,
-                 max_steering_angle=1.22, L=3, Q=np.eye(4), Qf=np.eye(4),
+                 max_steering_angle=1.22, lf = 1.5 , lr = 1.5, L=3, Q=np.eye(4), Qf=np.eye(4),
                  R=np.eye(2), Rd=np.eye(2), len_horizon=5, a_max=2, a_min=-1,
                  a_rate_max=1, steer_rate_max=0.5, v_min=-1, v_max=80, dist = 1.5, time_step = 0.1):
 
@@ -23,6 +24,8 @@ class MPC:
         self.max_steering_angle = max_steering_angle
 
         # Wheel base
+        self.lf = lf
+        self.lr = lr
         self.L = L
 
         # Control gain
@@ -49,6 +52,12 @@ class MPC:
         self.prev_accelerations = np.array([0.0] * self.len_horizon)
         self.prev_deltas = np.array([0.0] * self.len_horizon)
         self.prev_index = 0
+    
+    def update_state(self, x, y, v, yaw):
+        self.x = x
+        self.y = y
+        self.v = v
+        self.yaw = yaw
 
     def update_position(self, x, y):
         self.x = x
@@ -77,21 +86,47 @@ class MPC:
         return idx, cx[idx], cy[idx]
 
     def get_linearized_dynamics(self, yaw, delta, v, dt=0.01):
-        A = np.eye(4)
-        A[0, 2] = np.cos(yaw) * dt
-        A[0, 3] = -v * np.sin(yaw) * dt
-        A[1, 2] = np.sin(yaw) * dt
-        A[1, 3] = v * np.cos(yaw) * dt
-        A[3, 2] = np.tan(delta) * dt / self.L
+        # A = np.eye(4)
+        # A[0, 2] = np.cos(yaw) * dt
+        # A[0, 3] = -v * np.sin(yaw) * dt
+        # A[1, 2] = np.sin(yaw) * dt
+        # A[1, 3] = v * np.cos(yaw) * dt
+        # A[3, 2] = np.tan(delta) * dt / self.L
 
-        B = np.zeros((4, 2))
-        B[2, 0] = dt
-        B[3, 1] = v * dt / (self.L * np.cos(delta)**2)
+        # B = np.zeros((4, 2))
+        # B[2, 0] = dt
+        # B[3, 1] = v * dt / (self.L * np.cos(delta)**2)
+
+        # C = np.zeros((4, 1))
+        # C[0, 0] = v * np.sin(yaw) * yaw * dt
+        # C[1, 0] = - v * np.cos(yaw) * yaw * dt
+        # C[3, 0] = - v * delta * dt / (self.L * np.cos(delta)**2)
+
+        tandelta = math.tan(delta)
+        angel = yaw + math.atanh((self.lr*tandelta)/self.L)
+        deno1 = np.tan(delta)**2 + 1
+        deno2 = (self.lr**2*tandelta**2)/self.L**2 + 1
+        deno3 = self.L * np.sqrt(deno2)
+        # print(f"angles {yaw}, {angel}, {tandelta}")
+
+        A = np.array([[ 0, 0, np.cos(angel), -v*np.sin(angel)],
+                    [ 0, 0, np.sin(angel),  v*np.cos(angel)],
+                    [ 0, 0, 0, 0],
+                    [ 0, 0, tandelta/deno3, 0]]) * dt
+        A = A + np.eye(4)
+
+        B = np.array([[ 0, -(self.lr*v*np.sin(angel)*(deno1))/(self.L*(deno2))],
+                    [ 0, (self.lr*v*np.cos(angel)*(deno1))/(self.L*(deno2))],
+                    [ 1, 0],
+                    [ 0, (v*(deno1))/deno3 - (self.lr**2*v*tandelta**2*(deno1))/(deno3**3)]])
+        B *= dt
 
         C = np.zeros((4, 1))
-        C[0, 0] = v * np.sin(yaw) * yaw * dt
-        C[1, 0] = - v * np.cos(yaw) * yaw * dt
-        C[3, 0] = - v * delta * dt / (self.L * np.cos(delta)**2)
+        C[0, 0] = yaw*v*np.sin(angel) + (delta*self.lr*v*np.sin(angel)*deno1)/(self.L*(deno2))
+        C[1, 0] = -yaw*v*np.cos(angel) - (delta*self.lr*v*np.cos(angel)*deno1)/(self.L*(deno2))
+        C[2, 0] = 0
+        C[3, 0] = -delta*(v*deno1)/(deno3) - (self.lr**2*v*tandelta**2*deno1)/(deno3**3)
+        C *= dt
 
         return A, B, C
 
@@ -114,7 +149,8 @@ class MPC:
 
             ## Constraints
             A, B, C = self.get_linearized_dynamics(z_ref[3, i], self.prev_deltas[np.min([ i + 1, len(self.prev_deltas) - 1])],
-                                                   z_ref[2, i], dt)
+                                                z_ref[2, i], dt)
+
             constraints += [z[:, i+1] == A @ z[:, i] + B @ u[:, i] + C.flatten()]
 
             # Velocity limits

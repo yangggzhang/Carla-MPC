@@ -3,3 +3,4 @@ CarlaSimulator/
 *.pyc
 src/controller_output/
 *.pkl
+src/_out/

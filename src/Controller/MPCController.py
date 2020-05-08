@@ -138,7 +138,9 @@ class Controller(object):
             # SET CONTROLS OUTPUT
             ######################################################
         if acceleration > 0:
-            throttle_output = acceleration / MPCParams.a_max
+            # throttle_output = np.tanh(acceleration)
+            # throttle_output = max(0.0, min(1.0, throttle_output))
+            throttle_output = acceleration / MPCParams.a_max + 0.3
             brake_output = 0.0
         else:
             throttle_output = 0.0

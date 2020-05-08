@@ -974,7 +974,7 @@ def main():
     argparser.add_argument(
         '--time_step',
         metavar='DT',
-        default='0.3',
+        default='0.4',
         type=float,
         help='Planning time step for MPC')
     argparser.add_argument(
